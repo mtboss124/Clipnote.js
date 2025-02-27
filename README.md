@@ -9,3 +9,9 @@ we have to ways to display clipnote
     <clipnote-image url="path/to/clipfile.clip" width="320" height="240"></clipnote-image>
 # and then the animation player
     <clipnote-player url="path/to/clipfile.clip" width="320" height="240"></clipnote-image>
+
+
+# thats it
+if you can help make this code better i would apreciate it
+
+i bearly know how to code in javascript
