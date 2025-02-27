@@ -8,5 +8,4 @@ we have to ways to display clipnote
 # displaying thumbnails
     <clipnote-image url="path/to/clipfile.clip" width="320" height="240"></clipnote-image>
 # and then the animation player
-  <clipnote-player url="path/to/clipfile.clip" width="320" height="240"></clipnote-player>
-
+    <clipnote-player url="path/to/clipfile.clip" width="320" height="240"></clipnote-image>
