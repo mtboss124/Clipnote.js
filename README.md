@@ -2,7 +2,7 @@
 Clipnote studio .clip file player
 # howto make it work
 you need to import the script to the html file
-and also need jzip
+and also need jszip
 
 we have to ways to display clipnote
 # displaying thumbnails
