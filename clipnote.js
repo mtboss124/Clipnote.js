@@ -69,35 +69,69 @@ class ClipnotePlayer {
 
     async loadFrames(zip, frameMax) {
         const frames = [];
+        
         for (let i = 0; i <= frameMax; i++) {
             const layers = await this.loadLayers(zip, i);
-            frames.push(layers.length ? this.mergeLayers(layers) : this.createBlankFrame());
+    
+            if (layers.length > 0) {
+                frames.push(this.mergeLayers(layers));
+            } else {
+                console.warn(`Frame ${i} has no layers at all, creating blank frame`);
+                frames.push(this.createBlankFrame());
+            }
         }
+    
         return frames;
     }
-
+    
     async loadLayers(zip, frameNum) {
         const layers = [];
         let layerNum = 0;
+    
         while (true) {
             const fileName = `${frameNum},${layerNum}.png`;
             const file = zip.file(fileName);
-            if (!file) break;
+    
+            if (!file) {
+                // Don't break the loop, just skip missing layers
+                console.warn(`Missing layer ${layerNum} for frame ${frameNum}, skipping...`);
+                layerNum++;
+    
+                // Stop checking if we've skipped too many layers (to avoid infinite loops)
+                if (layerNum > 3) break; 
+                
+                continue;
+            }
+    
+            console.log(`Loading ${fileName}`);
             const blob = await file.async('blob');
             layers.push(await createImageBitmap(blob));
             layerNum++;
         }
+    
         return layers;
     }
+    
+    
 
     mergeLayers(layers) {
         const canvas = document.createElement('canvas');
         canvas.width = this.width;
         canvas.height = this.height;
         const ctx = canvas.getContext('2d');
-        layers.forEach(layer => ctx.drawImage(layer, 0, 0));
+    
+        if (layers.length === 0) {
+            console.warn("No layers to merge!");
+        }
+    
+        layers.forEach((layer, index) => {
+            console.log(`Drawing layer ${index}`);
+            ctx.drawImage(layer, 0, 0);
+        });
+    
         return canvas;
     }
+    
 
     createBlankFrame() {
         const canvas = document.createElement('canvas');
