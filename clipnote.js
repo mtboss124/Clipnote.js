@@ -190,36 +190,63 @@ class ClipnotePlayer {
     togglePlay() {
         this.isPlaying = !this.isPlaying;
         this.playPauseButton.textContent = this.isPlaying ? '⏸' : '▶';
+    
         if (this.isPlaying) {
             this.startPlayback();
-            if (this.sound) this.sound.play();
+            if (this.sound) {
+                this.sound.currentTime = this.currentFrame / this.framerate;
+                this.sound.play();
+            }
         } else {
             if (this.sound) this.sound.pause();
         }
     }
+    
 
     startPlayback() {
         const update = () => {
             if (!this.isPlaying) return;
+    
             this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
             this.ctx.drawImage(this.frames[this.currentFrame], 0, 0);
             this.timeline.value = this.currentFrame;
+    
             this.currentFrame++;
+    
             if (this.currentFrame >= this.frames.length) {
-                if (this.loop) this.currentFrame = 0;
-                else { this.isPlaying = false; this.playPauseButton.textContent = '▶'; return; }
+                if (this.loop) {
+                    this.currentFrame = 0;
+                    if (this.sound) this.sound.currentTime = 0; // Reset sound to start
+                } else {
+                    this.isPlaying = false;
+                    this.playPauseButton.textContent = '▶';
+    
+                    if (this.sound) {
+                        this.sound.pause();
+                        this.sound.currentTime = 0; // Ensure sound stops
+                    }
+                    return;
+                }
             }
+    
             setTimeout(update, 1000 / this.framerate);
         };
+    
         update();
     }
+    
 
     updateFrame() {
         this.currentFrame = parseInt(this.timeline.value);
         this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
         this.ctx.drawImage(this.frames[this.currentFrame], 0, 0);
-        if (this.sound) this.sound.currentTime = this.currentFrame / this.framerate;
+    
+        if (this.sound) {
+            this.sound.currentTime = this.currentFrame / this.framerate;
+            if (!this.isPlaying) this.sound.pause(); // Ensure it doesn't play when paused
+        }
     }
+    
 }
 
 document.addEventListener('DOMContentLoaded', () => {
