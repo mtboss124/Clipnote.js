@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Clipnote Player Test</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <script src="clipnote.js" defer></script>
+    <style>
+         .mockup-container {
+            font-family: flipnote;
+            width: 320px;
+            height: 240px;
+            max-width: 100%;
+            max-height: 100%;
+            position: relative;
+   
+            background: url(/img/bg.png) repeat; /* Repeat the background image */
+       
+            animation: scrollBackground 40s linear infinite; /* Apply animation */
+            image-rendering: pixelated; /* Enable pixelated rendering */
+        }
+        </style>
+</head>
+<body>
+
+
+    <div id="player-container" class="mockup-container">
+        <input type="file" id="file-input" accept=".clip" style="position: fixed;top: -30px;">
+        <clipnote-player id="clipnote-player" url="test.clip" width="320" height="240" style="position: relative; top: -30px;"></clipnote-player>
+    </div>
+
+    <script>
+        const fileInput = document.getElementById('file-input');
+        const playerContainer = document.getElementById('player-container');
+
+        fileInput.addEventListener('change', (event) => {
+            const file = event.target.files[0];
+            if (file && file.name.endsWith('.clip')) {
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    const blob = new Blob([e.target.result]);
+                    const url = URL.createObjectURL(blob);
+                    
+                    // Remove the old player
+                    const oldPlayer = document.getElementById('clipnote-player');
+                    if (oldPlayer) oldPlayer.remove();
+
+                    // Create a new player
+                    const newPlayer = document.createElement('clipnote-player');
+                    newPlayer.setAttribute('id', 'clipnote-player'); // Ensure it has the same ID
+                    newPlayer.setAttribute('url', url);
+                    newPlayer.setAttribute('width', '320');
+                    newPlayer.setAttribute('height', '240');
+                    newPlayer.style.position= 'relative'; 
+                    newPlayer.style.top= '-30px';
+
+                    // Add the new player to the container
+                    playerContainer.appendChild(newPlayer);
+
+                    // Re-initialize the player
+                    new ClipnotePlayer(newPlayer);
+                };
+                reader.readAsArrayBuffer(file);
+            } else {
+                alert('Please select a valid .clip file.');
+            }
+        });
+
+        
+        function zoomIn() {
+          
+            const container = document.querySelector('.mockup-container');
+            container.style.transform = 'scale(3)';
+            container.style.transition = 'transform 0.5s ease';
+            container.style.position = 'fixed';
+            container.style.top = '50%';
+            container.style.left = '50%';
+            container.style.transformOrigin = 'center center';
+            container.style.marginTop = `-${container.offsetHeight / 2}px`;
+            container.style.marginLeft = `-${container.offsetWidth / 2}px`;
+            // Set pixelated rendering for images
+            const images = container.querySelectorAll('img');
+            images.forEach(img => {
+                img.style.imageRendering = 'pixelated';
+            });
+        }
+        window.onload = zoomIn; // Automatically zoom in on page load
+    </script>
+
+</body>
+</html>
