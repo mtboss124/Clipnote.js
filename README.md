@@ -15,3 +15,13 @@ we have to ways to display clipnote
 if you can help make this code better i would apreciate it
 
 i bearly know how to code in javascript
+
+
+#screencaps
+by samuel
+![image](https://github.com/user-attachments/assets/66bac68b-b671-4b73-95fc-e11a85ed95e8)
+by itsumori
+![image](https://github.com/user-attachments/assets/ed804e12-6db6-41ab-b260-14c963fb6b2a)
+by mtboss124(me)
+![image](https://github.com/user-attachments/assets/ddfba238-a9dd-4fbc-9289-94aad3db7f81)
+
