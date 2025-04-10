@@ -68,24 +68,47 @@
         });
 
         
-        function zoomIn() {
-          
-            const container = document.querySelector('.mockup-container');
-            container.style.transform = 'scale(3)';
-            container.style.transition = 'transform 0.5s ease';
-            container.style.position = 'fixed';
-            container.style.top = '50%';
-            container.style.left = '50%';
-            container.style.transformOrigin = 'center center';
-            container.style.marginTop = `-${container.offsetHeight / 2}px`;
-            container.style.marginLeft = `-${container.offsetWidth / 2}px`;
-            // Set pixelated rendering for images
-            const images = container.querySelectorAll('img');
-            images.forEach(img => {
-                img.style.imageRendering = 'pixelated';
-            });
-        }
-        window.onload = zoomIn; // Automatically zoom in on page load
+function zoomIn() {
+
+
+    const container = document.querySelector('.mockup-container');
+
+    // Reset any transforms before measuring
+    container.style.transform = 'none';
+    container.style.position = 'absolute';
+    container.style.top = '0';
+    container.style.left = '0';
+
+    const containerWidth = container.offsetWidth;
+    const containerHeight = container.offsetHeight;
+    const screenWidth = window.innerWidth;
+    const screenHeight = window.innerHeight;
+
+    // Calculate scale to fit screen while preserving aspect ratio
+    const scaleX = screenWidth / containerWidth;
+    const scaleY = screenHeight / containerHeight;
+    const scale = Math.min(scaleX, scaleY);
+
+    // Apply styles
+    container.style.transform = `scale(${scale})`;
+    container.style.transition = 'transform 0.5s ease';
+    container.style.position = 'fixed';
+    container.style.top = '50%';
+    container.style.left = '50%';
+    container.style.transformOrigin = 'center center';
+    container.style.marginTop = `-${(containerHeight / 2)}px`;
+    container.style.marginLeft = `-${(containerWidth / 2)}px`;
+
+    // Set pixelated rendering for images
+    const images = container.querySelectorAll('img');
+    images.forEach(img => {
+        img.style.imageRendering = 'pixelated';
+    });
+}
+
+// Zoom in on load and resize
+window.onload = zoomIn;
+window.onresize = zoomIn;
     </script>
 
 </body>
