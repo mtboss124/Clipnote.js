@@ -87,7 +87,7 @@ function zoomIn() {
     // Calculate scale to fit screen while preserving aspect ratio
     const scaleX = screenWidth / containerWidth;
     const scaleY = screenHeight / containerHeight;
-    const scale = Math.min(scaleX, scaleY);
+    const scale = Math.min(scaleX, scaleY)/2;
 
     // Apply styles
     container.style.transform = `scale(${scale})`;
