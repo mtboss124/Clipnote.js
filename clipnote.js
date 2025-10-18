@@ -5,7 +5,7 @@ class ClipnotePlayer {
         this.width = element.getAttribute('width') || '320';
         this.height = element.getAttribute('height') || '240';
         this.isImage = element.tagName.toLowerCase() === 'clipnote-image';
-        this.menuImage = element.getAttribute('menu-image') || 'img/menubutton.png';
+        this.menuImage = element.getAttribute('menu-image') || 'img/playerbottom1.png';
         this.init();
     }
 
@@ -46,6 +46,7 @@ class ClipnotePlayer {
 
         this.frames = await this.loadFrames(zip, this.frameMax);
         this.sound = await this.loadSound(zip);
+        this.createPlayerContainer();
         this.createUI();
         this.createCanvas();
         this.setupPlayback();
@@ -153,128 +154,136 @@ class ClipnotePlayer {
         }
         return null;
     }
+        createPlayerContainer() {
+        // create a relative container to hold canvas, menu button and overlay UI
+        this.playerContainer = document.createElement('div');
+        this.playerContainer.classList.add('clipnote-player-container');
+        this.playerContainer.style.position = 'relative';
+        this.playerContainer.style.width = `${this.width}px`;
+        this.playerContainer.style.height = `${this.height}px`;
+        this.element.appendChild(this.playerContainer);
+    }
 
-    createCanvas() {
+  createCanvas() {
+        // If container wasn't created yet, create it
+        if (!this.playerContainer) this.createPlayerContainer();
+
         this.canvas = document.createElement('canvas');
         this.canvas.width = this.width;
         this.canvas.height = this.height;
+        this.canvas.style.display = 'block';
+        this.canvas.style.position = 'absolute';
+        this.canvas.style.left = '0';
+        this.canvas.style.top = '0';
+        this.canvas.style.zIndex = '1';
         this.ctx = this.canvas.getContext('2d');
         this.playerContainer.appendChild(this.canvas);
     }
 
     createUI() {
-        this.playerContainer = document.createElement('div');
-        this.playerContainer.classList.add('clipnote-player-container');
-        this.element.appendChild(this.playerContainer);
-    
+        // controls overlay (hidden by default)
         this.controls = document.createElement('div');
         this.controls.classList.add('clipnote-controls');
-        this.controls.style.position = 'relative';
-        this.controls.style.top = '240px';
+        this.controls.style.position = 'absolute';
+        this.controls.style.left = '0';
+        this.controls.style.bottom = '0';
+        this.controls.style.zIndex = '3';
+        this.controls.style.display = 'none';
         this.controls.style.backgroundImage = 'url(img/playerbottom2.png)';
         this.controls.style.imageRendering = 'pixelated';
-        this.controls.style.maxWidth = '320px';
+        this.controls.style.maxWidth = `${this.width}px`;
         this.controls.style.maxHeight = '30px';
-    
+        
+
+        // inner HTML for controls
         this.controls.innerHTML = `
-            <button class="play-pause">
+            <button class="play-pause" title="Play/Pause">
                 <img src="img/playericon1.png" alt="Play" />
             </button>
             <input type="range" min="0" max="${this.frameMax}" value="0" class="timeline">
-            <button class="mute-unmute">
+            <button class="mute-unmute" title="Mute">
                 <img src="img/volume1.png" alt="Audio Button" />
             </button>
             <input type="range" min="0" max="1" step="0.1" value="1" class="volume">
         `;
         this.playerContainer.appendChild(this.controls);
-    
+
+        // menu button (left-bottom) - visible initially
+        this.menuButton = document.createElement('button');
+        this.menuButton.classList.add('clipnote-menu-button');
+        this.menuButton.style.position = 'absolute';
+        this.menuButton.style.left = '6px';
+        this.menuButton.style.bottom = '6px';
+        this.menuButton.style.zIndex = '4';
+        this.menuButton.style.background = 'transparent';
+        this.menuButton.style.border = 'none';
+        this.menuButton.style.padding = '0';
+        const btnImg = document.createElement('img');
+        btnImg.src = this.menuImage;
+        btnImg.style.width = '28px';
+        btnImg.style.height = '28px';
+        btnImg.style.imageRendering = 'pixelated';
+        this.menuButton.appendChild(btnImg);
+        this.playerContainer.appendChild(this.menuButton);
+
+        // references to elements
         this.playPauseButton = this.controls.querySelector('.play-pause');
         this.timeline = this.controls.querySelector('.timeline');
         this.volumebtn = this.controls.querySelector('.mute-unmute');
         this.volume = this.controls.querySelector('.volume');
-    
-        // Apply styles to the play-pause button
-        this.playPauseButton.style.backgroundColor = 'transparent';
-        this.playPauseButton.style.left = '3px';
-        this.playPauseButton.style.position = 'relative';
-        this.playPauseButton.style.top = '1px';
-        this.playPauseButton.style.maxWidth = '25px';
-        this.playPauseButton.style.maxHeight = '25px';
-        this.playPauseButton.style.minWidth = '25px';
-        this.playPauseButton.style.minHeight = '25px';
-        this.playPauseButton.style.imageRendering = 'pixelated';
-        this.playPauseButton.style.border = 'none';
-    
-        // Apply styles to the mute button
-        this.volumebtn.style.backgroundColor = 'transparent';
-        this.volumebtn.style.left = '4px';
-        this.volumebtn.style.position = 'relative';
-        this.volumebtn.style.top = '1px';
-        this.volumebtn.style.maxWidth = '25px';
-        this.volumebtn.style.maxHeight = '25px';
-        this.volumebtn.style.minWidth = '25px';
-        this.volumebtn.style.minHeight = '25px';
-        this.volumebtn.style.imageRendering = 'pixelated';
-        this.volumebtn.style.border = 'none';
-    
-        // Style for the timeline (video progress slider)
-        this.timeline.style.width = '185px';
-        this.timeline.style.top = '4px';
+
+        // Styles for play and volume buttons
+        [this.playPauseButton, this.volumebtn].forEach(btn => {
+            btn.style.backgroundColor = 'transparent';
+            btn.style.position = 'relative';
+            btn.style.top = '3px';
+            btn.style.left = '4px';
+            btn.style.maxWidth = '25px';
+            btn.style.maxHeight = '25px';
+            btn.style.minWidth = '25px';
+            btn.style.minHeight = '25px';
+            btn.style.imageRendering = 'pixelated';
+            btn.style.border = 'none';
+        });
+
+        // timeline and volume styling
+        this.timeline.style.width = Math.max(100, this.width - 110) + 'px';
         this.timeline.style.position = 'relative';
-    
-        // Inject CSS for custom slider thumb
-        const style = document.createElement('style');
-        style.innerHTML = `
-            .timeline::-webkit-slider-thumb {
-                background: url('img/playerthingy.png') no-repeat center;
-                background-size: contain;
-                width: 16px;
-                height: 16px;
-                border: none;
-                cursor: pointer;
-                appearance: none;
-            }
-            .timeline::-moz-range-thumb {
-                background: url('img/playerthingy.png') no-repeat center;
-                background-size: contain;
-                width: 18px;
-                height: 18px;
-                border: none;
-                cursor: pointer;
-            }
-            .volume::-webkit-slider-thumb {
-                background: url('img/playerthingy.png') no-repeat center;
-                background-size: contain;
-                width: 16px;
-                height: 16px;
-                border: none;
-                cursor: pointer;
-                appearance: none;
-            }
-            .volume::-moz-range-thumb {
-                background: url('img/playerthingy.png') no-repeat center;
-                background-size: contain;
-                width: 18px;
-                height: 18px;
-                border: none;
-                cursor: pointer;
-            }
-        `;
-        document.head.appendChild(style);
-    
-        // Volume slider styling
         this.volume.style.width = '65px';
-        this.volume.style.top = '4px';
-        this.volume.style.left = '2px';
         this.volume.style.position = 'relative';
-    
-        // Function to update slider background
+
+        // thumb CSS injection (only once)
+        if (!document.getElementById('clipnote-slider-styles')) {
+            const style = document.createElement('style');
+            style.id = 'clipnote-slider-styles';
+            style.innerHTML = `
+                .timeline::-webkit-slider-thumb, .volume::-webkit-slider-thumb {
+                    background: url('img/playerthingy.png') no-repeat center;
+                    background-size: contain;
+                    width: 16px;
+                    height: 16px;
+                    border: none;
+                    cursor: pointer;
+                    appearance: none;
+                }
+                .timeline::-moz-range-thumb, .volume::-moz-range-thumb {
+                    background: url('img/playerthingy.png') no-repeat center;
+                    background-size: contain;
+                    width: 18px;
+                    height: 18px;
+                    border: none;
+                    cursor: pointer;
+                }
+            `;
+            document.head.appendChild(style);
+        }
+
+        // slider background helper
         function updateSliderBackground(slider) {
             const percentage = (slider.value - slider.min) / (slider.max - slider.min) * 100;
             slider.style.background = `linear-gradient(to right, #ccccff ${percentage}%, #7e73e7 ${percentage}%)`;
         }
-    
-        // Apply styles to timeline and volume
+  // Apply styles to timeline and volume
         this.timeline.style.background = 'linear-gradient(to right, #ccccff 0%, #444 0%)';
         this.volume.style.background = 'linear-gradient(to right, #ccccff 100%, #444 0%)';
     
@@ -294,12 +303,43 @@ class ClipnotePlayer {
         // Initialize slider backgrounds on load
         updateSliderBackground(this.timeline);
         updateSliderBackground(this.volume);
-    
-        // Event Listeners
+
+        // show/hide UI logic
+        this.hideUiTimer = null;
+        this.menuButton.addEventListener('click', () => {
+            this.menuButton.style.display = 'none';
+            this.showControls();
+        });
+
+        // interactions reset the hide timer
+        const resetHideTimer = () => {
+            if (this.hideUiTimer) {
+                clearTimeout(this.hideUiTimer);
+            }
+            this.hideUiTimer = setTimeout(() => {
+                this.hideControls();
+            }, 5000);
+        };
+
+        // when controls shown, start the auto-hide timer and listen to interactions
+        this.controls.addEventListener('pointermove', resetHideTimer);
+        this.controls.addEventListener('input', resetHideTimer);
+        this.playerContainer.addEventListener('pointermove', resetHideTimer);
+
+        // Event Listeners for media controls
         this.playPauseButton.addEventListener('click', () => this.togglePlay());
         this.timeline.addEventListener('input', () => this.updateFrame());
-        this.volume.addEventListener('input', () => this.updateVolume());
         this.volumebtn.addEventListener('click', () => this.toggleMute());
+
+        // keep play icon in sync if audio changes
+        if (this.sound) {
+            this.sound.addEventListener('ended', () => {
+                if (!this.loop) {
+                    this.isPlaying = false;
+                    this.playPauseButton.innerHTML = '<img src="img/playericon1.png" alt="Play" />';
+                }
+            });
+        }
     }
     
         showControls() {
