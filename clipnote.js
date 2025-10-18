@@ -5,6 +5,7 @@ class ClipnotePlayer {
         this.width = element.getAttribute('width') || '320';
         this.height = element.getAttribute('height') || '240';
         this.isImage = element.tagName.toLowerCase() === 'clipnote-image';
+        this.menuImage = element.getAttribute('menu-image') || 'img/menubutton.png';
         this.init();
     }
 
@@ -48,6 +49,16 @@ class ClipnotePlayer {
         this.createUI();
         this.createCanvas();
         this.setupPlayback();
+                // draw first frame (replace thumbnail)
+        if (this.frames && this.frames.length > 0) {
+            this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+            this.ctx.drawImage(this.frames[0], 0, 0);
+            // remove thumbnail once we have drawn the first frame
+            if (this.thumbnailImage && this.thumbnailImage.parentNode) {
+                this.thumbnailImage.parentNode.removeChild(this.thumbnailImage);
+                this.thumbnailImage = null;
+            }
+        }
     }
 
     parseIni(data) {
@@ -159,7 +170,7 @@ class ClipnotePlayer {
         this.controls = document.createElement('div');
         this.controls.classList.add('clipnote-controls');
         this.controls.style.position = 'relative';
-        this.controls.style.top = '270px';
+        this.controls.style.top = '240px';
         this.controls.style.backgroundImage = 'url(img/playerbottom2.png)';
         this.controls.style.imageRendering = 'pixelated';
         this.controls.style.maxWidth = '320px';
@@ -196,7 +207,7 @@ class ClipnotePlayer {
     
         // Apply styles to the mute button
         this.volumebtn.style.backgroundColor = 'transparent';
-        this.volumebtn.style.left = '1px';
+        this.volumebtn.style.left = '4px';
         this.volumebtn.style.position = 'relative';
         this.volumebtn.style.top = '1px';
         this.volumebtn.style.maxWidth = '25px';
@@ -254,7 +265,7 @@ class ClipnotePlayer {
         // Volume slider styling
         this.volume.style.width = '65px';
         this.volume.style.top = '4px';
-        this.volume.style.left = '-3px';
+        this.volume.style.left = '2px';
         this.volume.style.position = 'relative';
     
         // Function to update slider background
@@ -291,7 +302,23 @@ class ClipnotePlayer {
         this.volumebtn.addEventListener('click', () => this.toggleMute());
     }
     
-    
+        showControls() {
+        this.controls.style.display = 'flex';
+        this.controls.style.alignItems = 'center';
+        this.controls.style.gap = '8px';
+        // start auto-hide timer
+        if (this.hideUiTimer) clearTimeout(this.hideUiTimer);
+        this.hideUiTimer = setTimeout(() => this.hideControls(), 2000);
+    }
+
+    hideControls() {
+        this.controls.style.display = 'none';
+        this.menuButton.style.display = 'block';
+        if (this.hideUiTimer) {
+            clearTimeout(this.hideUiTimer);
+            this.hideUiTimer = null;
+        }
+    }
     
     
     
@@ -300,13 +327,24 @@ class ClipnotePlayer {
         this.currentFrame = 0;
     }
 
-    togglePlay() {
+   togglePlay() {
+        // If clip finished and not looping, restart from beginning
+        if (!this.loop && !this.isPlaying && this.frames && this.currentFrame >= this.frames.length) {
+            this.currentFrame = 0;
+            if (this.sound) this.sound.currentTime = 0;
+        }
+
         this.isPlaying = !this.isPlaying;
         this.playPauseButton.innerHTML = this.isPlaying 
             ? '<img src="img/playericon2.png" alt="Pause" />' 
             : '<img src="img/playericon1.png" alt="Play" />';
 
         if (this.isPlaying) {
+            // If starting playback when at or beyond last frame, reset
+            if (this.frames && this.currentFrame >= this.frames.length) {
+                this.currentFrame = 0;
+            }
+
             this.startPlayback();
             if (this.sound) {
                 this.sound.currentTime = this.currentFrame / this.framerate;
