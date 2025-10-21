@@ -81,18 +81,42 @@ class ClipnotePlayer {
     async loadFrames(zip, frameMax) {
         const frames = [];
         
-        for (let i = 0; i <= frameMax; i++) {
-            const layers = await this.loadLayers(zip, i);
-    
-            if (layers.length > 0) {
-                frames.push(this.mergeLayers(layers));
-            } else {
-                console.warn(`Frame ${i} has no layers at all, creating blank frame`);
-                frames.push(this.createBlankFrame());
+        // Batch process frames for better performance
+        const batchSize = 10;
+        for (let start = 0; start <= frameMax; start += batchSize) {
+            const end = Math.min(start + batchSize - 1, frameMax);
+            const batchPromises = [];
+            
+            for (let i = start; i <= end; i++) {
+                batchPromises.push(this.loadSingleFrame(zip, i));
+            }
+            
+            const batchFrames = await Promise.all(batchPromises);
+            frames.push(...batchFrames);
+            
+            // Allow browser to breathe between batches
+            if (start + batchSize <= frameMax) {
+                await new Promise(resolve => setTimeout(resolve, 0));
             }
         }
     
         return frames;
+    }
+    
+    async loadSingleFrame(zip, frameNum) {
+        const layers = await this.loadLayers(zip, frameNum);
+        
+        if (layers.length > 0) {
+            const merged = this.mergeLayers(layers);
+            // Clean up layer ImageBitmaps to free memory
+            layers.forEach(layer => {
+                if (layer.close) layer.close();
+            });
+            return merged;
+        } else {
+            console.warn(`Frame ${frameNum} has no layers at all, creating blank frame`);
+            return this.createBlankFrame();
+        }
     }
     
     async loadLayers(zip, frameNum) {
@@ -110,7 +134,6 @@ class ClipnotePlayer {
                 continue;
             }
     
-            console.log(`Loading ${fileName}`);
             const blob = await file.async('blob');
             layers.push(await createImageBitmap(blob));
             layerNum++;
@@ -129,8 +152,7 @@ class ClipnotePlayer {
             console.warn("No layers to merge!");
         }
     
-        layers.forEach((layer, index) => {
-            console.log(`Drawing layer ${index}`);
+        layers.forEach((layer) => {
             ctx.drawImage(layer, 0, 0);
         });
     
@@ -278,31 +300,28 @@ class ClipnotePlayer {
             document.head.appendChild(style);
         }
 
-        // slider background helper
-        function updateSliderBackground(slider) {
+        // slider background helper - make it a class method
+        this.updateSliderBackground = (slider) => {
             const percentage = (slider.value - slider.min) / (slider.max - slider.min) * 100;
             slider.style.background = `linear-gradient(to right, #ccccff ${percentage}%, #7e73e7 ${percentage}%)`;
-        }
+        };
   // Apply styles to timeline and volume
         this.timeline.style.background = 'linear-gradient(to right, #ccccff 0%, #444 0%)';
         this.volume.style.background = 'linear-gradient(to right, #ccccff 100%, #444 0%)';
     
         // Update the timeline and volume background on input
-        this.timeline.addEventListener('input', function() {
-            updateSliderBackground(this);
+        this.timeline.addEventListener('input', () => {
+            this.updateSliderBackground(this.timeline);
         });
-        this.volume.addEventListener('input', function() {
-            updateSliderBackground(this);
+        this.volume.addEventListener('input', () => {
+            this.updateSliderBackground(this.volume);
         });
     
-        // Ensure real-time updates during playback
-        setInterval(() => {
-            updateSliderBackground(this.timeline);
-        }, 100);
+        // Background updates are handled by the animation loop now
     
         // Initialize slider backgrounds on load
-        updateSliderBackground(this.timeline);
-        updateSliderBackground(this.volume);
+        this.updateSliderBackground(this.timeline);
+        this.updateSliderBackground(this.volume);
 
         // show/hide UI logic
         this.hideUiTimer = null;
@@ -330,6 +349,7 @@ class ClipnotePlayer {
         this.playPauseButton.addEventListener('click', () => this.togglePlay());
         this.timeline.addEventListener('input', () => this.updateFrame());
         this.volumebtn.addEventListener('click', () => this.toggleMute());
+        this.volume.addEventListener('input', () => this.updateVolume());
 
         // keep play icon in sync if audio changes
         if (this.sound) {
@@ -365,6 +385,11 @@ class ClipnotePlayer {
     setupPlayback() {
         this.isPlaying = false;
         this.currentFrame = 0;
+        this.lastFrameTime = 0;
+        this.frameInterval = 1000 / this.framerate;
+        this.animationId = null;
+        this.startTime = 0;
+        this.pausedTime = 0;
     }
 
    togglePlay() {
@@ -385,12 +410,29 @@ class ClipnotePlayer {
                 this.currentFrame = 0;
             }
 
-            this.startPlayback();
+            // Set proper start time for timing calculations
+            this.startTime = performance.now() - (this.currentFrame * this.frameInterval);
+            
+            // Draw the current frame immediately
+            if (this.frames && this.frames[this.currentFrame]) {
+                this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+                this.ctx.drawImage(this.frames[this.currentFrame], 0, 0);
+                this.timeline.value = this.currentFrame;
+                this.updateSliderBackground(this.timeline);
+            }
+            
             if (this.sound) {
                 this.sound.currentTime = this.currentFrame / this.framerate;
-                this.sound.play();
+                this.sound.play().catch(e => console.warn('Audio play failed:', e));
             }
+            
+            this.startPlayback();
         } else {
+            this.pausedTime = performance.now();
+            if (this.animationId) {
+                cancelAnimationFrame(this.animationId);
+                this.animationId = null;
+            }
             if (this.sound) this.sound.pause();
         }
     }
@@ -410,45 +452,94 @@ class ClipnotePlayer {
     }
     
     startPlayback() {
-        const update = () => {
-            if (!this.isPlaying) return;
+        const update = (timestamp) => {
+            if (!this.isPlaying) {
+                this.animationId = null;
+                return;
+            }
     
-            this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
-            this.ctx.drawImage(this.frames[this.currentFrame], 0, 0);
-            this.timeline.value = this.currentFrame;
+            // Initialize startTime on first frame if not set
+            if (!this.startTime || this.startTime > timestamp) {
+                this.startTime = timestamp - (this.currentFrame * this.frameInterval);
+            }
     
-            this.currentFrame++;
+            // Calculate precise frame based on elapsed time
+            const elapsed = timestamp - this.startTime;
+            const targetFrame = Math.floor(elapsed / this.frameInterval);
+            
+            // Only update if we need to show a new frame
+            if (targetFrame !== this.currentFrame && targetFrame < this.frames.length) {
+                this.currentFrame = targetFrame;
+                this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+                this.ctx.drawImage(this.frames[this.currentFrame], 0, 0);
+                this.timeline.value = this.currentFrame;
+                this.updateSliderBackground(this.timeline);
+                
+                // Audio sync correction - only adjust if drift is very significant
+                if (this.sound && !this.sound.paused) {
+                    const expectedAudioTime = this.currentFrame / this.framerate;
+                    const actualAudioTime = this.sound.currentTime;
+                    const drift = Math.abs(expectedAudioTime - actualAudioTime);
+                    
+                    // Only correct major drift (>200ms) to avoid stuttering
+                    if (drift > 0.2) {
+                        this.sound.currentTime = expectedAudioTime;
+                    }
+                }
+            }
     
-            if (this.currentFrame >= this.frames.length) {
+            // Handle end of animation
+            if (targetFrame >= this.frames.length) {
                 if (this.loop) {
+                    this.startTime = timestamp; // Reset timing for loop
                     this.currentFrame = 0;
-                    if (this.sound) this.sound.currentTime = 0; // Reset sound to start
+                    if (this.sound) {
+                        // Always reset audio for loop, regardless of current state
+                        this.sound.currentTime = 0;
+                        if (this.isPlaying) {
+                            this.sound.play().catch(e => console.warn('Audio play failed:', e));
+                        }
+                    }
                 } else {
                     this.isPlaying = false;
-                    this.playPauseButton.innerHTML = '<img src="img/playericon1.png" alt="Play" />'; // Reset to play icon
-    
+                    this.animationId = null;
+                    this.playPauseButton.innerHTML = '<img src="img/playericon1.png" alt="Play" />';
+                    
                     if (this.sound) {
                         this.sound.pause();
-                        this.sound.currentTime = 0; // Ensure sound stops
+                        this.sound.currentTime = 0;
                     }
                     return;
                 }
             }
     
-            setTimeout(update, 1000 / this.framerate);
+            this.animationId = requestAnimationFrame(update);
         };
     
-        update();
+        this.animationId = requestAnimationFrame(update);
     }
     
     updateFrame() {
-        this.currentFrame = parseInt(this.timeline.value);
-        this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
-        this.ctx.drawImage(this.frames[this.currentFrame], 0, 0);
-    
-        if (this.sound) {
-            this.sound.currentTime = this.currentFrame / this.framerate;
-            if (!this.isPlaying) this.sound.pause(); // Ensure it doesn't play when paused
+        const newFrame = parseInt(this.timeline.value);
+        
+        // Only update if frame actually changed
+        if (newFrame !== this.currentFrame) {
+            this.currentFrame = newFrame;
+            
+            // Update timing for precise playback continuation
+            if (this.isPlaying) {
+                this.startTime = performance.now() - (this.currentFrame * this.frameInterval);
+            }
+            
+            this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+            this.ctx.drawImage(this.frames[this.currentFrame], 0, 0);
+            this.updateSliderBackground(this.timeline);
+        
+            // Only update audio time when not playing to avoid stuttering
+            if (this.sound && !this.isPlaying) {
+                this.sound.currentTime = this.currentFrame / this.framerate;
+                this.sound.pause();
+            }
         }
     }
     updateVolume() {
@@ -464,6 +555,36 @@ class ClipnotePlayer {
         }
     }
     
+    // Cleanup method to free resources
+    destroy() {
+        if (this.animationId) {
+            cancelAnimationFrame(this.animationId);
+            this.animationId = null;
+        }
+        
+        if (this.sound) {
+            this.sound.pause();
+            this.sound.src = '';
+            this.sound.load();
+        }
+        
+        if (this.hideUiTimer) {
+            clearTimeout(this.hideUiTimer);
+            this.hideUiTimer = null;
+        }
+        
+        // Clean up frames
+        if (this.frames) {
+            this.frames.forEach(frame => {
+                if (frame && frame.getContext) {
+                    const ctx = frame.getContext('2d');
+                    ctx.clearRect(0, 0, frame.width, frame.height);
+                }
+            });
+        }
+        
+        this.isPlaying = false;
+    }
 }
 
 document.addEventListener('DOMContentLoaded', () => {
