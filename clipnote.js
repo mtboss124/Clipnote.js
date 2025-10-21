@@ -183,6 +183,7 @@ class ClipnotePlayer {
         this.playerContainer.style.position = 'relative';
         this.playerContainer.style.width = `${this.width}px`;
         this.playerContainer.style.height = `${this.height}px`;
+        this.playerContainer.style.overflow = `hidden`;
         this.element.appendChild(this.playerContainer);
     }
 
@@ -200,6 +201,9 @@ class ClipnotePlayer {
         this.canvas.style.zIndex = '1';
         this.ctx = this.canvas.getContext('2d');
         this.playerContainer.appendChild(this.canvas);
+        
+        // Setup canvas interactions now that canvas exists
+        this.setupCanvasInteractions();
     }
 
     createUI() {
@@ -300,14 +304,19 @@ class ClipnotePlayer {
             document.head.appendChild(style);
         }
 
-        // slider background helper - make it a class method
+        // slider background helper - make it a class method with proper thumb alignment
         this.updateSliderBackground = (slider) => {
             const percentage = (slider.value - slider.min) / (slider.max - slider.min) * 100;
-            slider.style.background = `linear-gradient(to right, #ccccff ${percentage}%, #7e73e7 ${percentage}%)`;
+            // Adjust for circular thumb visual center - thumb is 16px wide, so we need to account for the visual offset
+            const thumbWidth = 16;
+            const sliderWidth = slider.offsetWidth;
+            const thumbOffset = thumbWidth / 2;
+            const adjustedPercentage = percentage * (sliderWidth - thumbWidth) / sliderWidth + (thumbOffset / sliderWidth * 100);
+            slider.style.background = `linear-gradient(to right, #ccccff ${adjustedPercentage}%, #7e73e7 ${adjustedPercentage}%)`;
         };
   // Apply styles to timeline and volume
-        this.timeline.style.background = 'linear-gradient(to right, #ccccff 0%, #444 0%)';
-        this.volume.style.background = 'linear-gradient(to right, #ccccff 100%, #444 0%)';
+        this.timeline.style.background = 'linear-gradient(to right, #ccccff 0%, #7e73e7 0%)';
+        this.volume.style.background = 'linear-gradient(to right, #ccccff 100%, #7e73e7 0%)';
     
         // Update the timeline and volume background on input
         this.timeline.addEventListener('input', () => {
@@ -325,9 +334,17 @@ class ClipnotePlayer {
 
         // show/hide UI logic
         this.hideUiTimer = null;
+        
+        // Mouse proximity detection for cat menu button
+        this.setupMouseProximityDetection();
+        
         this.menuButton.addEventListener('click', () => {
-            this.menuButton.style.display = 'none';
-            this.showControls();
+            // Fade out cat and show controls with spring animation
+            this.menuButton.style.opacity = '0';
+            setTimeout(() => {
+                this.menuButton.style.display = 'none';
+            }, 300);
+            this.showControlsWithSpring();
         });
 
         // interactions reset the hide timer
@@ -336,7 +353,7 @@ class ClipnotePlayer {
                 clearTimeout(this.hideUiTimer);
             }
             this.hideUiTimer = setTimeout(() => {
-                this.hideControls();
+                this.hideControlsWithSpring();
             }, 5000);
         };
 
@@ -362,23 +379,37 @@ class ClipnotePlayer {
         }
     }
     
-        showControls() {
+    showControls() {
         this.controls.style.display = 'flex';
         this.controls.style.alignItems = 'center';
         this.controls.style.gap = '8px';
         // start auto-hide timer
         if (this.hideUiTimer) clearTimeout(this.hideUiTimer);
-        this.hideUiTimer = setTimeout(() => this.hideControls(), 2000);
+        this.hideUiTimer = setTimeout(() => this.hideControlsWithSpring(), 200);
+    }
+    
+    showControlsWithSpring() {
+        // Set up spring animation styles
+        this.controls.style.transition = 'transform 0.4s cubic-bezier(0.175, 0.885, 0.32, 1), opacity 0.3s ease-out';
+        
+        // Start from below and invisible
+        this.controls.style.transform = 'translateY(15px)';
+        this.controls.style.opacity = '0';
+        this.controls.style.display = 'flex';
+        this.controls.style.alignItems = 'center';
+        this.controls.style.gap = '8px';
+        
+        // Animate to final position with spring effect
+        setTimeout(() => {
+            this.controls.style.transform = 'translateY(0)';
+            this.controls.style.opacity = '1';
+        }, 10);
+        
+        // start auto-hide timer
+        if (this.hideUiTimer) clearTimeout(this.hideUiTimer);
+        this.hideUiTimer = setTimeout(() => this.hideControlsWithSpring(), 2000);
     }
 
-    hideControls() {
-        this.controls.style.display = 'none';
-        this.menuButton.style.display = 'block';
-        if (this.hideUiTimer) {
-            clearTimeout(this.hideUiTimer);
-            this.hideUiTimer = null;
-        }
-    }
     
     
     
@@ -391,10 +422,44 @@ class ClipnotePlayer {
         this.startTime = 0;
         this.pausedTime = 0;
     }
+    
+    setupCanvasInteractions() {
+        // Canvas click to play/pause
+        this.canvas.addEventListener('click', () => this.togglePlay());
+        this.canvas.style.cursor = 'pointer';
+        
+        // Add keyboard event listener to document
+        this.keyboardHandler = (event) => {
+            // Only respond when the player container is in focus/view
+            const rect = this.playerContainer.getBoundingClientRect();
+            const isVisible = rect.top >= 0 && rect.left >= 0 && 
+                             rect.bottom <= window.innerHeight && 
+                             rect.right <= window.innerWidth;
+            
+            if (!isVisible) return;
+            
+            // Prevent default behavior to avoid page scrolling on spacebar
+            if (event.code === 'Space') {
+                event.preventDefault();
+                this.togglePlay();
+            } else if (event.code === 'KeyM') {
+                event.preventDefault();
+                this.toggleMute();
+            } else if (event.code === 'ArrowLeft') {
+                event.preventDefault();
+                this.scrubFrame(-1);
+            } else if (event.code === 'ArrowRight') {
+                event.preventDefault();
+                this.scrubFrame(1);
+            }
+        };
+        
+        document.addEventListener('keydown', this.keyboardHandler);
+    }
 
    togglePlay() {
         // If clip finished and not looping, restart from beginning
-        if (!this.loop && !this.isPlaying && this.frames && this.currentFrame >= this.frames.length) {
+        if (!this.loop && this.frames && this.currentFrame >= this.frames.length) {
             this.currentFrame = 0;
             if (this.sound) this.sound.currentTime = 0;
         }
@@ -449,6 +514,9 @@ class ClipnotePlayer {
             this.volume.value = 0; // Move slider to 0 when muted
             this.volumebtn.innerHTML = '<img src="img/volume2.png" alt="Muted" />';
         }
+        
+        // Update the volume slider background after mute/unmute
+        this.updateSliderBackground(this.volume);
     }
     
     startPlayback() {
@@ -504,6 +572,7 @@ class ClipnotePlayer {
                     this.isPlaying = false;
                     this.animationId = null;
                     this.playPauseButton.innerHTML = '<img src="img/playericon1.png" alt="Play" />';
+                    this.currentFrame = 0; // Reset to beginning for non-looped animations
                     
                     if (this.sound) {
                         this.sound.pause();
@@ -542,6 +611,40 @@ class ClipnotePlayer {
             }
         }
     }
+    
+    scrubFrame(direction) {
+        if (!this.frames || this.frames.length === 0) return;
+        
+        // Calculate new frame position
+        let newFrame = this.currentFrame + direction;
+        
+        // Clamp to valid range
+        newFrame = Math.max(0, Math.min(newFrame, this.frames.length - 1));
+        
+        // Only update if frame actually changed
+        if (newFrame !== this.currentFrame) {
+            this.currentFrame = newFrame;
+            
+            // Update timeline slider
+            this.timeline.value = this.currentFrame;
+            this.updateSliderBackground(this.timeline);
+            
+            // Update timing for precise playback continuation if playing
+            if (this.isPlaying) {
+                this.startTime = performance.now() - (this.currentFrame * this.frameInterval);
+            }
+            
+            // Draw the new frame
+            this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+            this.ctx.drawImage(this.frames[this.currentFrame], 0, 0);
+            
+            // Update audio time when not playing to avoid stuttering
+            if (this.sound && !this.isPlaying) {
+                this.sound.currentTime = this.currentFrame / this.framerate;
+                this.sound.pause();
+            }
+        }
+    }
     updateVolume() {
         if (this.sound) {
             this.sound.volume = this.volume.value;
@@ -552,6 +655,134 @@ class ClipnotePlayer {
                 this.sound.muted = false;
                 this.volumebtn.innerHTML = '<img src="img/volume1.png" alt="Unmuted" />';
             }
+        }
+        
+        // Update the volume slider background in real time
+        this.updateSliderBackground(this.volume);
+    }
+    
+    // Cleanup method to free resources
+    destroy() {
+        if (this.animationId) {
+            cancelAnimationFrame(this.animationId);
+            this.animationId = null;
+        }
+        
+        if (this.sound) {
+            this.sound.pause();
+            this.sound.src = '';
+            this.sound.load();
+        }
+        
+        if (this.hideUiTimer) {
+            clearTimeout(this.hideUiTimer);
+            this.hideUiTimer = null;
+        }
+        
+        // Clean up frames
+        if (this.frames) {
+            this.frames.forEach(frame => {
+                if (frame && frame.getContext) {
+                    const ctx = frame.getContext('2d');
+                    ctx.clearRect(0, 0, frame.width, frame.height);
+                }
+            });
+        }
+        
+        this.isPlaying = false;
+    }
+    
+    setupMouseProximityDetection() {
+        // Initially hide the menu button
+        this.menuButton.style.display = 'none';
+        this.menuButton.style.opacity = '0';
+        this.menuButton.style.transition = 'opacity 0.3s ease-in-out';
+        
+        // Track hover state to prevent flickering
+        this.isHoveringCat = false;
+        
+        // Add mouse move listener to document to detect proximity
+        this.mouseProximityHandler = (event) => {
+            if (this.controls.style.display !== 'none') {
+                // Don't show cat if controls are already visible
+                return;
+            }
+            
+            const rect = this.playerContainer.getBoundingClientRect();
+            const mouseX = event.clientX - rect.left;
+            const mouseY = event.clientY - rect.top;
+            
+            // Define proximity zone - larger area extending right and up from cat
+            const proximityWidth = 220; // horizontal detection area (extends more to the right)
+            const proximityHeight = 100; // vertical detection area (extends more upward)
+            
+            // Get the menu button's position (it's positioned at left: 6px, bottom: 6px)
+            const catPosition = {
+                x: 6, // left edge of cat icon
+                y: rect.height - 6 - 28 // top edge of cat icon (bottom - height)
+            };
+            
+            // Check if mouse is within the expanded rectangular area
+            const isInProximity = (
+                mouseX >= catPosition.x - 20 && // extend 20px to the left
+                mouseX <= catPosition.x + proximityWidth && // extend right
+                mouseY >= catPosition.y - proximityHeight && // extend up
+                mouseY <= catPosition.y + 48 // extend 20px below cat (28px height + 20px)
+            );
+            
+            if (isInProximity && !this.isHoveringCat) {
+                // Mouse entered proximity area - show cat with fade in
+                this.isHoveringCat = true;
+                this.menuButton.style.display = 'block';
+                this.menuButton.style.opacity = '0'; // Ensure it starts at 0
+                // Small delay to ensure display and initial opacity are set
+                setTimeout(() => {
+                    this.menuButton.style.opacity = '1';
+                }, 10); // Small delay to trigger the transition
+            } else if (!isInProximity && this.isHoveringCat) {
+                // Mouse left proximity area - hide cat with fade out
+                this.isHoveringCat = false;
+                this.menuButton.style.opacity = '0';
+                // Hide display after animation completes
+                setTimeout(() => {
+                    if (!this.isHoveringCat) {
+                        this.menuButton.style.display = 'none';
+                    }
+                }, 300); // Wait for fade animation to complete
+            }
+        };
+        
+        document.addEventListener('mousemove', this.mouseProximityHandler);
+    }
+    
+    // Update hideControls to reset cat visibility
+    hideControls() {
+        this.controls.style.display = 'none';
+        // Don't automatically show menu button anymore - let proximity detection handle it
+        if (this.hideUiTimer) {
+            clearTimeout(this.hideUiTimer);
+            this.hideUiTimer = null;
+        }
+    }
+    
+    hideControlsWithSpring() {
+        // Set up spring animation for hiding - easing that goes straight down
+        this.controls.style.transition = 'transform 0.4s cubic-bezier(0.25, 0.46, 0.45, 0.94), opacity 0.2s ease-in';
+        
+        // Animate further down (out of view) and invisible
+        this.controls.style.transform = 'translateY(70px)';
+        this.controls.style.opacity = '0';
+        
+        // Hide display after animation
+        setTimeout(() => {
+            this.controls.style.display = 'none';
+            // Reset transform for next show (back to starting position)
+            this.controls.style.transform = 'translateY(15px)';
+        }, 100);
+        
+        if (this.hideUiTimer) {
+            clearTimeout(this.hideUiTimer);
+            this.hideUiTimer = null;
         }
     }
     
@@ -571,6 +802,16 @@ class ClipnotePlayer {
         if (this.hideUiTimer) {
             clearTimeout(this.hideUiTimer);
             this.hideUiTimer = null;
+        }
+        
+        // Remove mouse proximity listener
+        if (this.mouseProximityHandler) {
+            document.removeEventListener('mousemove', this.mouseProximityHandler);
+        }
+        
+        // Remove keyboard listener
+        if (this.keyboardHandler) {
+            document.removeEventListener('keydown', this.keyboardHandler);
         }
         
         // Clean up frames
