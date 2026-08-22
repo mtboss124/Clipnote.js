@@ -160,6 +160,10 @@ button, label {
 </main>
 <script>
 (() => {
+  const DEFAULT_SAMPLE_PATHS = {
+    cns: '',
+    clip: '',
+  };
   const inputs = [document.getElementById('fileInput'), document.getElementById('folderInput')];
   const playerHost = document.getElementById('playerHost');
   const status = document.getElementById('status');
@@ -235,14 +239,10 @@ button, label {
     items.appendChild(button);
   }
 
-  async function loadFiles(input) {
+  async function loadCandidates(candidates) {
     if (activePlayer) activePlayer.destroy();
     activePlayer = null;
     entries = []; selected = -1; playerHost.replaceChildren(); items.innerHTML = '';
-    const candidates = [...input.files].filter(file => {
-      const name = file.name.toLowerCase();
-      return name.endsWith('.cns') || name.endsWith('.clip');
-    });
     status.textContent = `Reading ${candidates.length} file${candidates.length === 1 ? '' : 's'}...`;
     for (const file of candidates) {
       try {
@@ -258,10 +258,38 @@ button, label {
     entries.forEach(addPlaylistItem);
     status.textContent = `${entries.length} file${entries.length === 1 ? '' : 's'} ready`;
     select(0);
+  }
+
+  async function loadFiles(input) {
+    const candidates = [...input.files].filter(file => {
+      const name = file.name.toLowerCase();
+      return name.endsWith('.cns') || name.endsWith('.clip');
+    });
+    await loadCandidates(candidates);
     input.value = '';
   }
 
   inputs.forEach(input => input.addEventListener('change', () => loadFiles(input)));
+
+  async function loadDefaultSamples() {
+    const paths = [DEFAULT_SAMPLE_PATHS.cns, DEFAULT_SAMPLE_PATHS.clip].filter(Boolean);
+    if (!paths.length) return;
+    const samples = [];
+    for (const path of paths) {
+      try {
+        const response = await fetch(path);
+        if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
+        const url = new URL(path, document.baseURI);
+        const name = decodeURIComponent(url.pathname.split('/').pop());
+        samples.push(new File([await response.blob()], name));
+      } catch (error) {
+        console.warn(`Unable to load default sample ${path}:`, error);
+      }
+    }
+    if (samples.length) await loadCandidates(samples);
+  }
+
+  loadDefaultSamples();
 })();
 </script>
 </body>
