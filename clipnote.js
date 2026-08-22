@@ -1,4 +1,3 @@
-
 const CNS = (() => {
     const MAGIC = [0x43, 0x4E, 0x53]; // "CNS"
     const VERSION = 2; // v2 adds thumbnail_frame to HDR1
@@ -114,7 +113,8 @@ const CNS = (() => {
 
         //per-frame, per-layer tile-index grids
         const frameCount = frameMax + 1;
-        const indexWidth = dictTileCount <= 255 ? 1 : 2;
+        // must match cns_encode.js's frmsIndexWidth() / Python's _frms_index_format()
+        const indexWidth = dictTileCount <= 255 ? 1 : (dictTileCount <= 65535 ? 2 : 4);
         const frmsRaw = await inflateZlib(chunks['FRMS']);
         const frames = [];
         {
@@ -131,8 +131,10 @@ const CNS = (() => {
                         for (let t = 0; t < TILE_COUNT; t++) {
                             if (indexWidth === 1) {
                                 grid[t] = frmsRaw[off]; off += 1;
-                            } else {
+                            } else if (indexWidth === 2) {
                                 grid[t] = frmsRaw[off] | (frmsRaw[off + 1] << 8); off += 2;
+                            } else {
+                                grid[t] = readUint32LE(frmsRaw, off); off += 4;
                             }
                         }
                         layers.push({ visible, grid });
