@@ -1,3 +1,213 @@
+
+const CNS = (() => {
+    const MAGIC = [0x43, 0x4E, 0x53]; // "CNS"
+    const WIDTH = 320, HEIGHT = 240;
+    const TILE = 8;
+    const TILES_X = WIDTH / TILE;    // 40
+    const TILES_Y = HEIGHT / TILE;   // 30
+    const TILE_COUNT = TILES_X * TILES_Y; // 1200
+    const LAYER_COUNT = 3;
+    const TRANSPARENT = 6;
+
+    // index -> [r, g, b]; index 6 (transparent) has no entry
+    const PALETTE = {
+        0: [0xff, 0xff, 0xff], // white
+        1: [0x14, 0x14, 0x14], // black
+        2: [0xff, 0x17, 0x17], // red
+        3: [0xff, 0xe6, 0x00], // yellow
+        4: [0x00, 0x82, 0x32], // green
+        5: [0x06, 0xae, 0xff], // blue
+    };
+
+    async function inflateZlib(bytes) {
+        const ds = new DecompressionStream('deflate');
+        const stream = new Blob([bytes]).stream().pipeThrough(ds);
+        return new Uint8Array(await new Response(stream).arrayBuffer());
+    }
+
+    function readUint16LE(view, offset) {
+        return view[offset] | (view[offset + 1] << 8);
+    }
+
+    function readUint32LE(view, offset) {
+        return (
+            (view[offset] |
+                (view[offset + 1] << 8) |
+                (view[offset + 2] << 16) |
+                (view[offset + 3] << 24)) >>> 0
+        );
+    }
+
+    function readString(view, offset) {
+        const len = readUint16LE(view, offset);
+        offset += 2;
+        const strBytes = view.subarray(offset, offset + len);
+        const str = new TextDecoder('utf-8').decode(strBytes);
+        offset += len;
+        return [str, offset];
+    }
+
+    function rleDecode(bytes) {
+        const pixels = [];
+        for (let i = 0; i < bytes.length; i += 2) {
+            const run = bytes[i];
+            const val = bytes[i + 1];
+            for (let k = 0; k < run; k++) pixels.push(val);
+        }
+        return pixels;
+    }
+
+    function readChunks(bytes) {
+        const chunks = {};
+        let offset = 5; // 3-byte magic + 2-byte version
+        while (offset < bytes.length) {
+            const id = String.fromCharCode(
+                bytes[offset], bytes[offset + 1], bytes[offset + 2], bytes[offset + 3]
+            );
+            offset += 4;
+            const length = readUint32LE(bytes, offset);
+            offset += 4;
+            chunks[id] = bytes.subarray(offset, offset + length);
+            offset += length;
+        }
+        return chunks;
+    }
+
+    async function parse(arrayBuffer) {
+        const bytes = new Uint8Array(arrayBuffer);
+        if (bytes[0] !== MAGIC[0] || bytes[1] !== MAGIC[1] || bytes[2] !== MAGIC[2]) {
+            throw new Error('CNS: not a CNS file (bad magic)');
+        }
+
+        const chunks = readChunks(bytes);
+        const hdr = chunks['HDR1'];
+
+        let o = 0;
+        const framerate = hdr[o]; o += 1;
+        const frameMax = readUint32LE(hdr, o); o += 4;
+        const replay = hdr[o]; o += 1;
+        const locked = hdr[o]; o += 1;
+        let fileId; [fileId, o] = readString(hdr, o);
+        const spinoff = hdr[o]; o += 1;
+        let spinoffSourceFileId; [spinoffSourceFileId, o] = readString(hdr, o);
+        let originalUserName; [originalUserName, o] = readString(hdr, o);
+        let originalUserId; [originalUserId, o] = readString(hdr, o);
+        const hasAudio = hdr[o]; o += 1;
+        const dictTileCount = readUint32LE(hdr, o); o += 4;
+        let userName; [userName, o] = readString(hdr, o);
+        let userId; [userId, o] = readString(hdr, o);
+
+        //tile dictionary
+        const tdicRaw = await inflateZlib(chunks['TDIC']);
+        const tileDict = [];
+        {
+            let off = 0;
+            for (let i = 0; i < dictTileCount; i++) {
+                const rleLen = readUint16LE(tdicRaw, off); off += 2;
+                const rle = tdicRaw.subarray(off, off + rleLen); off += rleLen;
+                tileDict.push(rleDecode(rle));
+            }
+        }
+
+        //per-frame, per-layer tile-index grids
+        const frameCount = frameMax + 1;
+        const indexWidth = dictTileCount <= 255 ? 1 : 2;
+        const frmsRaw = await inflateZlib(chunks['FRMS']);
+        const frames = [];
+        {
+            let off = 0;
+            for (let f = 0; f < frameCount; f++) {
+                const layers = [];
+                for (let l = 0; l < LAYER_COUNT; l++) {
+                    const visible = !!frmsRaw[off]; off += 1;
+                    const emptyFlag = frmsRaw[off]; off += 1;
+                    if (emptyFlag) {
+                        layers.push({ visible, grid: null });
+                    } else {
+                        const grid = new Array(TILE_COUNT);
+                        for (let t = 0; t < TILE_COUNT; t++) {
+                            if (indexWidth === 1) {
+                                grid[t] = frmsRaw[off]; off += 1;
+                            } else {
+                                grid[t] = frmsRaw[off] | (frmsRaw[off + 1] << 8); off += 2;
+                            }
+                        }
+                        layers.push({ visible, grid });
+                    }
+                }
+                frames.push(layers);
+            }
+        }
+
+        const audioBytes = hasAudio && chunks['AUD1'] ? chunks['AUD1'] : null;
+
+        return {
+            framerate, frameMax, frameCount, replay, locked,
+            fileId, spinoff, spinoffSourceFileId,
+            originalUserName, originalUserId,
+            userName, userId,
+            dictTileCount, tileDict, frames, audioBytes,
+        };
+    }
+
+    function buildLayerCanvas(tileDict, grid) {
+        const canvas = document.createElement('canvas');
+        canvas.width = WIDTH;
+        canvas.height = HEIGHT;
+        const ctx = canvas.getContext('2d');
+        const imageData = ctx.createImageData(WIDTH, HEIGHT);
+        const data = imageData.data;
+
+        for (let ty = 0; ty < TILES_Y; ty++) {
+            for (let tx = 0; tx < TILES_X; tx++) {
+                const pixels = tileDict[grid[ty * TILES_X + tx]];
+                const baseX = tx * TILE;
+                const baseY = ty * TILE;
+                for (let row = 0; row < TILE; row++) {
+                    const y = baseY + row;
+                    let off = (y * WIDTH + baseX) * 4;
+                    for (let col = 0; col < TILE; col++) {
+                        const v = pixels[row * TILE + col];
+                        if (v === TRANSPARENT) {
+                            data[off + 3] = 0;
+                        } else {
+                            const [r, g, b] = PALETTE[v];
+                            data[off] = r;
+                            data[off + 1] = g;
+                            data[off + 2] = b;
+                            data[off + 3] = 255;
+                        }
+                        off += 4;
+                    }
+                }
+            }
+        }
+
+        ctx.putImageData(imageData, 0, 0);
+        return canvas;
+    }
+
+    function buildFrameCanvas(cnsFile, frameIndex) {
+        const canvas = document.createElement('canvas');
+        canvas.width = WIDTH;
+        canvas.height = HEIGHT;
+        const ctx = canvas.getContext('2d');
+
+
+        const layers = cnsFile.frames[frameIndex];
+        for (let l = 0; l < LAYER_COUNT; l++) {
+            const layer = layers[l];
+            if (!layer.visible || !layer.grid) continue;
+            const layerCanvas = buildLayerCanvas(cnsFile.tileDict, layer.grid);
+            ctx.drawImage(layerCanvas, 0, 0);
+        }
+
+        return canvas;
+    }
+
+    return { parse, buildFrameCanvas, buildLayerCanvas, WIDTH, HEIGHT, PALETTE, TRANSPARENT };
+})();
+
 class ClipnotePlayer {
     constructor(element) {
         this.element = element;
@@ -17,6 +227,17 @@ class ClipnotePlayer {
 
         const response = await fetch(this.url);
         const blob = await response.blob();
+
+        if (await this.isCNSFile(blob)) {
+            const buffer = await blob.arrayBuffer();
+            if (this.isImage) {
+                await this.loadThumbnailCNS(buffer);
+            } else {
+                await this.loadAnimationCNS(buffer);
+            }
+            return;
+        }
+
         const zip = await JSZip.loadAsync(blob);
 
         if (this.isImage) {
@@ -24,6 +245,69 @@ class ClipnotePlayer {
         } else {
             this.loadAnimation(zip);
         }
+    }
+
+    async isCNSFile(blob) {
+        const head = new Uint8Array(await blob.slice(0, 3).arrayBuffer());
+        return head[0] === 0x43 && head[1] === 0x4E && head[2] === 0x53; // "C","N","S"
+    }
+
+    async loadThumbnailCNS(buffer) {
+        const cnsFile = await CNS.parse(buffer);
+        const frameCanvas = CNS.buildFrameCanvas(cnsFile, 0);
+        const img = document.createElement('img');
+        img.src = frameCanvas.toDataURL('image/png');
+        img.width = this.width;
+        img.height = this.height;
+        this.element.appendChild(img);
+    }
+
+    async loadAnimationCNS(buffer) {
+        const cnsFile = await CNS.parse(buffer);
+
+        this.framerate = cnsFile.framerate || 12;
+        this.loop = cnsFile.replay === 1;
+        this.frameMax = cnsFile.frameMax || 0;
+
+        this.cnsMeta = {
+            fileId: cnsFile.fileId,
+            locked: cnsFile.locked === 1,
+            spinoff: cnsFile.spinoff === 1,
+            spinoffSourceFileId: cnsFile.spinoffSourceFileId,
+            originalUserName: cnsFile.originalUserName,
+            originalUserId: cnsFile.originalUserId,
+            userName: cnsFile.userName,
+            userId: cnsFile.userId,
+        };
+
+        this.frames = [];
+        for (let i = 0; i < cnsFile.frameCount; i++) {
+            this.frames.push(CNS.buildFrameCanvas(cnsFile, i));
+        }
+
+        this.sound = this.loadSoundFromCNS(cnsFile);
+
+        this.createPlayerContainer();
+        this.createUI();
+        this.createCanvas();
+        this.setupPlayback();
+
+        // draw first frame (replace thumbnail)
+        if (this.frames && this.frames.length > 0) {
+            this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+            this.ctx.drawImage(this.frames[0], 0, 0);
+            if (this.thumbnailImage && this.thumbnailImage.parentNode) {
+                this.thumbnailImage.parentNode.removeChild(this.thumbnailImage);
+                this.thumbnailImage = null;
+            }
+        }
+    }
+
+    loadSoundFromCNS(cnsFile) {
+        if (!cnsFile.audioBytes) return null;
+        const blob = new Blob([cnsFile.audioBytes], { type: 'audio/ogg' });
+        const url = URL.createObjectURL(blob);
+        return new Audio(url);
     }
 
     async loadThumbnail(zip) {
