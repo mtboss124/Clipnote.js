@@ -1,116 +1,268 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Clipnote Player Test</title>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
-    <script src="clipnote.js" defer></script>
-    <style>
-         .mockup-container {
-            font-family: flipnote;
-            width: 320px;
-            height: 240px;
-            max-width: 100%;
-            max-height: 100%;
-            position: relative;
-   
-            background: url(img/bg.png) repeat; /* Repeat the background image */
-       
-            animation: scrollBackground 40s linear infinite; /* Apply animation */
-            image-rendering: pixelated; /* Enable pixelated rendering */
-        }
-        </style>
-</head>
-<body>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CNS player</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<script src="clipnote.js"></script>
+<style>
+/* Theme */
+:root {
 
+  --surface: #8b7ffe;
+  --text: #fff;
+  --muted-text: #ccccff;
+  --border: #7e73e7;
+  --border-light: #9e94ff;
 
-    <div id="player-container" class="mockup-container">
-        <input type="file" id="file-input" accept=".clip,.cns" style="position: fixed;top: -30px; z-index: 9;">
-        <clipnote-player id="clipnote-player" url="test.clip" width="320" height="240" style="position: fixed; top: 0px;"></clipnote-player>
-    </div>
-
-    <script>
-        const fileInput = document.getElementById('file-input');
-        const playerContainer = document.getElementById('player-container');
-
-        fileInput.addEventListener('change', (event) => {
-            const file = event.target.files[0];
-            const isValid = file && (file.name.endsWith('.clip') || file.name.endsWith('.cns'));
-            if (file && isValid) {
-                const reader = new FileReader();
-                reader.onload = (e) => {
-                    const blob = new Blob([e.target.result]);
-                    const url = URL.createObjectURL(blob);
-                    
-                    // Remove the old player
-                    const oldPlayer = document.getElementById('clipnote-player');
-                    if (oldPlayer) oldPlayer.remove();
-
-                    // Create a new player
-                    const newPlayer = document.createElement('clipnote-player');
-                    newPlayer.setAttribute('id', 'clipnote-player'); // Ensure it has the same ID
-                    newPlayer.setAttribute('url', url);
-                    newPlayer.setAttribute('width', '320');
-                    newPlayer.setAttribute('height', '240');
-                    newPlayer.style.position= 'relative'; 
-                    newPlayer.style.top= '0px';
-
-                    // Add the new player to the container
-                    playerContainer.appendChild(newPlayer);
-
-                    // Re-initialize the player
-                    new ClipnotePlayer(newPlayer);
-                };
-                reader.readAsArrayBuffer(file);
-            } else {
-                alert('Please select a valid .clip or .cns file.');
-            }
-        });
-
-        
-function zoomIn() {
-
-
-    const container = document.querySelector('.mockup-container');
-
-    // Reset any transforms before measuring
-    container.style.transform = 'none';
-    container.style.position = 'absolute';
-    container.style.top = '0';
-    container.style.left = '0';
-
-    const containerWidth = container.offsetWidth;
-    const containerHeight = container.offsetHeight;
-    const screenWidth = window.innerWidth;
-    const screenHeight = window.innerHeight;
-
-    // Calculate scale to fit screen while preserving aspect ratio
-    const scaleX = screenWidth / containerWidth;
-    const scaleY = screenHeight / containerHeight;
-    const scale = Math.min(scaleX, scaleY)/2;
-
-    // Apply styles
-    container.style.transform = `scale(${scale})`;
-    container.style.transition = 'transform 0.5s ease';
-    container.style.position = 'fixed';
-    container.style.top = '50%';
-    container.style.left = '50%';
-    container.style.transformOrigin = 'center center';
-    container.style.marginTop = `-${(containerHeight / 2)}px`;
-    container.style.marginLeft = `-${(containerWidth / 2)}px`;
-
-    // Set pixelated rendering for images
-    const images = container.querySelectorAll('img');
-    images.forEach(img => {
-        img.style.imageRendering = 'pixelated';
-    });
 }
 
-// Zoom in on load and resize
-window.onload = zoomIn;
-window.onresize = zoomIn;
-    </script>
+/* Base */
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+ 
+  background: var(--text);
+  background-image: url(img/bg.png);
+  background-size: 32px 32px;
+  color: var(--text);
+  font: 14px Arial, sans-serif;
+}
+.app { max-width: 1100px; margin: auto; }
 
+/* File toolbar */
+.toolbar { margin-bottom: 14px; }
+button, label {
+  padding: 8px 12px;
+  border: 1px solid var(--border-light);
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+}
+.playlist-item.active { border-color: var(--text); }
+#fileInput, #folderInput { display: none; }
+.status { color: var(--muted-text); }
+
+/* Main two-column layout */
+.content {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 310px;
+  gap: 16px;
+  align-items: start;
+}
+.player-container { min-width: 0; }
+#playerHost, clipnote-player { display: block; width: 100%; }
+
+/* Metadata */
+.player-meta {
+  padding: 10px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  outline: var(--border-light) solid 5px;
+  outline-offset: -5px;
+}
+.player-meta h1 {
+  margin: 0 0 10px;
+  font-size: 18px;
+  font-weight: normal;
+}
+.metadata {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+.metadata th, .metadata td {
+  padding: 5px 7px;
+  border-top: 1px solid var(--border-light);
+  text-align: left;
+  vertical-align: top;
+  word-break: break-word;
+}
+.metadata th { width: 38%; color: var(--muted-text); font-weight: normal; }
+
+/* Playlist */
+.playlist {
+  padding: 10px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+}
+.playlist h2 { margin: 0 0 10px; font-size: 14px; font-weight: normal; }
+.playlist-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 10px; }
+.playlist-head h2 { margin: 0; }
+.playlist-actions { display: flex; gap: 4px; }
+.playlist-actions label { padding: 5px 7px; font-size: 11px; }
+#playlistItems {
+  display: grid;
+  gap: 6px;
+  max-height: 620px;
+  overflow-y: auto;
+}
+.playlist-item {
+  display: grid;
+  grid-template-columns: 74px minmax(0, 1fr);
+  gap: 8px;
+  width: 100%;
+  padding: 5px;
+  text-align: left;
+}
+.playlist-item canvas, .playlist-item img {
+  display: block;
+  width: 74px;
+  height: 56px;
+  background-color: var(--surface);
+  background-image: url(img/bg.png);
+  background-repeat: repeat;
+  image-rendering: pixelated;
+}
+.playlist-item strong, .playlist-item span {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.playlist-item strong { margin: 4px 0; font-size: 12px; font-weight: normal; }
+.playlist-item span { color: var(--muted-text); font-size: 11px; }
+.empty { padding: 8px 2px; color: var(--muted-text); }
+
+/* Small screens */
+@media (max-width: 760px) {
+  body { padding: 10px; }
+  .content { grid-template-columns: 1fr; }
+  #playlistItems { max-height: 280px; }
+}
+</style>
+</head>
+<body>
+<main class="app">
+  <div class="content">
+    <section class="player-container">
+      <div id="playerHost"></div>
+      <section class="player-meta">
+        <h1 id="metaTitle">Select a CNS file</h1>
+        <table class="metadata"><tbody id="metadata"></tbody></table>
+      </section>
+    </section>
+    <aside class="playlist">
+      <div class="playlist-head">
+        <h2>Playlist <span id="playlistCount"></span></h2>
+        <div class="playlist-actions">
+          <label for="fileInput">Files</label>
+          <label for="folderInput">Folder</label>
+          <input id="fileInput" type="file" multiple accept=".cns,.clip">
+          <input id="folderInput" type="file" webkitdirectory directory multiple accept=".cns,.clip">
+        </div>
+      </div>
+      <div class="status" id="status">No files loaded</div>
+      <div id="playlistItems"><div class="empty">Load a folder to begin.</div></div>
+    </aside>
+  </div>
+</main>
+<script>
+(() => {
+  const inputs = [document.getElementById('fileInput'), document.getElementById('folderInput')];
+  const playerHost = document.getElementById('playerHost');
+  const status = document.getElementById('status');
+  const items = document.getElementById('playlistItems');
+  const metadata = document.getElementById('metadata');
+  const metaTitle = document.getElementById('metaTitle');
+  const count = document.getElementById('playlistCount');
+  let entries = [];
+  let selected = -1;
+  let activePlayer = null;
+  const row = (name, value) => `<tr><th>${name}</th><td>${value ?? ''}</td></tr>`;
+
+  function showMetadata(entry) {
+    if (!entry.cns) {
+      metaTitle.textContent = entry.name;
+      const rows = [row('file', entry.name), row('format', '.clip')];
+      for (const [section, values] of Object.entries(entry.clipMeta)) {
+        for (const [name, value] of Object.entries(values)) {
+          rows.push(row(`${section}.${name}`, value));
+        }
+      }
+      rows.push(row('thumbnail', entry.hasThumbnail ? 'embedded thumb.png' : 'not included'));
+      metadata.innerHTML = rows.join('');
+      return;
+    }
+    const file = entry.cns;
+    metaTitle.textContent = entry.name;
+    metadata.innerHTML = [
+      row('file', entry.name), row('file id', file.fileId),
+      row('original author', file.originalUserName), row('original user id', file.originalUserId),
+      row('current author', file.userName), row('current user id', file.userId),
+      row('frames', file.frameCount), row('framerate', `${file.framerate} fps`),
+      row('thumbnail frame', `${file.thumbnailFrame + 1} / ${file.frameCount}`),
+      row('loop', file.replay ? 'yes' : 'no'), row('locked', file.locked ? 'yes' : 'no'),
+      row('spinoff', file.spinoff ? 'yes' : 'no'), row('spinoff source', file.spinoffSourceFileId),
+      row('audio', file.audioBytes ? 'Ogg audio' : 'none'), row('dictionary tiles', file.dictTileCount),
+    ].join('');
+  }
+
+  function select(index) {
+    selected = index;
+    const entry = entries[index];
+    if (!entry) return;
+    if (activePlayer) activePlayer.destroy();
+    playerHost.replaceChildren();
+    const element = document.createElement('clipnote-player');
+    element.setAttribute('url', entry.url);
+    element.setAttribute('width', '640');
+    element.setAttribute('height', '480');
+    element.setAttribute('autoplay', '');
+    playerHost.appendChild(element);
+    activePlayer = new ClipnotePlayer(element);
+    showMetadata(entry);
+    document.querySelectorAll('.playlist-item').forEach((el, i) => el.classList.toggle('active', i === index));
+  }
+
+  function addPlaylistItem(entry, index) {
+    const button = document.createElement('button');
+    button.className = 'playlist-item';
+    const thumbnail = entry.thumbnail;
+    thumbnail.style.backgroundColor = getComputedStyle(document.documentElement)
+      .getPropertyValue('--surface').trim();
+    button.appendChild(thumbnail);
+    const text = document.createElement('span');
+    const title = document.createElement('strong');
+    title.textContent = entry.name;
+    const author = document.createElement('span');
+    author.textContent = entry.cns
+      ? (entry.cns.originalUserName || entry.cns.userName || 'unknown author')
+      : (entry.clipMeta.user?.name || '.clip file');
+    text.append(title, author); button.appendChild(text);
+    button.addEventListener('click', () => select(index));
+    items.appendChild(button);
+  }
+
+  async function loadFiles(input) {
+    if (activePlayer) activePlayer.destroy();
+    activePlayer = null;
+    entries = []; selected = -1; playerHost.replaceChildren(); items.innerHTML = '';
+    const candidates = [...input.files].filter(file => {
+      const name = file.name.toLowerCase();
+      return name.endsWith('.cns') || name.endsWith('.clip');
+    });
+    status.textContent = `Reading ${candidates.length} file${candidates.length === 1 ? '' : 's'}...`;
+    for (const file of candidates) {
+      try {
+        const url = URL.createObjectURL(file);
+        const parsed = await ClipnotePlayer.parseFile(file);
+        entries.push({ name: file.name, url, ...parsed });
+      }
+      catch (error) { console.warn(`Skipping ${file.name}:`, error); }
+    }
+    entries.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+    count.textContent = `(${entries.length})`;
+    if (!entries.length) { items.innerHTML = '<div class="empty">No readable CNS files found.</div>'; status.textContent = 'No readable CNS files'; return; }
+    entries.forEach(addPlaylistItem);
+    status.textContent = `${entries.length} file${entries.length === 1 ? '' : 's'} ready`;
+    select(0);
+    input.value = '';
+  }
+
+  inputs.forEach(input => input.addEventListener('change', () => loadFiles(input)));
+})();
+</script>
 </body>
 </html>
