@@ -19,6 +19,35 @@ const CNS = (() => {
         5: [0x06, 0x39, 0xce], // blue
     };
 
+        function colorValue(color) {
+            if (Array.isArray(color) && color.length === 3 && color.every(Number.isInteger) &&
+                color.every(value => value >= 0 && value <= 255)) {
+                return color.slice();
+            }
+            if (typeof color === 'string') {
+                const match = color.match(/^#([0-9a-f]{6})$/i);
+                if (match) return [
+                    parseInt(match[1].slice(0, 2), 16),
+                    parseInt(match[1].slice(2, 4), 16),
+                    parseInt(match[1].slice(4, 6), 16),
+                ];
+            }
+            throw new Error('palette colors must be [r, g, b] arrays or #rrggbb strings');
+        }
+
+        function createPalette(palette = {}, base = PALETTE) {
+            const result = {};
+            for (let index = 0; index < 6; index++) {
+                result[index] = base[index].slice();
+                if (palette[index] !== undefined) result[index] = colorValue(palette[index]);
+            }
+            return result;
+        }
+
+        function getPalette() {
+            return createPalette();
+        }
+
     async function inflateZlib(bytes) {
         const ds = new DecompressionStream('deflate');
         const stream = new Blob([bytes]).stream().pipeThrough(ds);
@@ -155,7 +184,7 @@ const CNS = (() => {
         };
     }
 
-    function buildLayerCanvas(tileDict, grid) {
+    function buildLayerCanvas(tileDict, grid, palette = PALETTE) {
         const canvas = document.createElement('canvas');
         canvas.width = WIDTH;
         canvas.height = HEIGHT;
@@ -176,7 +205,7 @@ const CNS = (() => {
                         if (v === TRANSPARENT) {
                             data[off + 3] = 0;
                         } else {
-                            const [r, g, b] = PALETTE[v];
+                            const [r, g, b] = palette[v];
                             data[off] = r;
                             data[off + 1] = g;
                             data[off + 2] = b;
@@ -192,63 +221,154 @@ const CNS = (() => {
         return canvas;
     }
 
-    function buildFrameCanvas(cnsFile, frameIndex) {
+    function buildFrameCanvas(cnsFile, frameIndex, palette = PALETTE) {
         const canvas = document.createElement('canvas');
         canvas.width = WIDTH;
         canvas.height = HEIGHT;
         const ctx = canvas.getContext('2d');
 
-
         const layers = cnsFile.frames[frameIndex];
         for (let l = 0; l < LAYER_COUNT; l++) {
             const layer = layers[l];
             if (!layer.visible || !layer.grid) continue;
-            const layerCanvas = buildLayerCanvas(cnsFile.tileDict, layer.grid);
+            const layerCanvas = buildLayerCanvas(cnsFile.tileDict, layer.grid, palette);
             ctx.drawImage(layerCanvas, 0, 0);
         }
 
         return canvas;
     }
 
-    return { parse, buildFrameCanvas, buildLayerCanvas, WIDTH, HEIGHT, PALETTE, TRANSPARENT };
+    return { parse, buildFrameCanvas, buildLayerCanvas, createPalette, getPalette, WIDTH, HEIGHT, PALETTE, TRANSPARENT };
 })();
 
+window.CNS = CNS;
+
 class ClipnotePlayer {
+    static async parseFile(source) {
+        const blob = source instanceof Blob ? source : new Blob([source]);
+        const head = new Uint8Array(await blob.slice(0, 3).arrayBuffer());
+        if (head[0] === 0x43 && head[1] === 0x4e && head[2] === 0x53) {
+            const cns = await CNS.parse(await blob.arrayBuffer());
+            return {
+                format: 'cns',
+                cns,
+                thumbnail: CNS.buildFrameCanvas(cns, cns.thumbnailFrame),
+                hasThumbnail: true,
+            };
+        }
+
+        const zip = await JSZip.loadAsync(blob);
+        const iniFile = zip.file('data.ini');
+        if (!iniFile) throw new Error('data.ini not found in .clip');
+        const clipMeta = ClipnotePlayer.parseIni(await iniFile.async('text'));
+        const thumbFile = zip.file('thumb.png');
+        let thumbnail;
+        if (thumbFile) {
+            thumbnail = document.createElement('img');
+            thumbnail.src = URL.createObjectURL(await thumbFile.async('blob'));
+            thumbnail.alt = 'Clipnote thumbnail';
+        } else {
+            thumbnail = document.createElement('canvas');
+            thumbnail.width = CNS.WIDTH;
+            thumbnail.height = CNS.HEIGHT;
+        }
+        return { format: 'clip', clipMeta, thumbnail, hasThumbnail: !!thumbFile };
+    }
+
+    static parseIni(data) {
+        const result = {};
+        let section = null;
+        for (const rawLine of data.split(/\r?\n/)) {
+            const line = rawLine.trim();
+            if (line.startsWith('[') && line.endsWith(']')) {
+                section = line.slice(1, -1).toLowerCase();
+                result[section] = {};
+            } else if (section && line.includes('=')) {
+                const split = line.indexOf('=');
+                const key = line.slice(0, split).trim();
+                const value = line.slice(split + 1).trim().replace(/^"|"$/g, '');
+                result[section][key] = value;
+            }
+        }
+        return result;
+    }
+
     constructor(element) {
         this.element = element;
         this.url = element.getAttribute('url');
         this.width = element.getAttribute('width') || '320';
         this.height = element.getAttribute('height') || '240';
+        this.scaling = (element.getAttribute('scaling') || 'auto').toLowerCase();
+        if (!['auto', 'integer', 'pixelated', 'smooth'].includes(this.scaling)) {
+            this.scaling = 'auto';
+        }
+        this.palette = CNS.getPalette();
         this.isImage = element.tagName.toLowerCase() === 'clipnote-image';
         this.menuImage = element.getAttribute('menu-image') || 'img/playerbottom1.png';
-        this.init();
+        this.ready = this.init();
     }
 
     async init() {
+        this.createLoadingOverlay();
         if (!this.url) {
             console.error('ClipnotePlayer: No URL provided');
+            this.hideLoadingOverlay();
             return;
         }
 
-        const response = await fetch(this.url);
-        const blob = await response.blob();
+        try {
+            const response = await fetch(this.url);
+            const blob = await response.blob();
 
-        if (await this.isCNSFile(blob)) {
-            const buffer = await blob.arrayBuffer();
-            if (this.isImage) {
-                await this.loadThumbnailCNS(buffer);
-            } else {
-                await this.loadAnimationCNS(buffer);
+            if (await this.isCNSFile(blob)) {
+                const buffer = await blob.arrayBuffer();
+                if (this.isImage) {
+                    await this.loadThumbnailCNS(buffer);
+                } else {
+                    await this.loadAnimationCNS(buffer);
+                }
+                return;
             }
-            return;
+
+            const zip = await JSZip.loadAsync(blob);
+
+            if (this.isImage) {
+                await this.loadThumbnail(zip);
+            } else {
+                await this.loadAnimation(zip);
+            }
+        } finally {
+            this.hideLoadingOverlay();
         }
+    }
 
-        const zip = await JSZip.loadAsync(blob);
+    createLoadingOverlay() {
+        this.element.style.position = 'relative';
+        this.element.style.display = 'block';
+        this.element.style.width = '100%';
+        this.element.style.aspectRatio = '4 / 3';
+        this.loadingOverlay = document.createElement('div');
+        this.loadingOverlay.style.position = 'absolute';
+        this.loadingOverlay.style.inset = '0';
+        this.loadingOverlay.style.zIndex = '10';
+        this.loadingOverlay.style.display = 'grid';
+        this.loadingOverlay.style.placeItems = 'center';
+        this.loadingOverlay.style.backgroundImage = 'url(img/bg.png)';
+        this.loadingOverlay.style.backgroundRepeat = 'repeat';
+        const loadingImage = document.createElement('img');
+        loadingImage.src = 'img/loading.gif';
+        loadingImage.alt = 'Loading';
+        loadingImage.style.width = 'min(96px, 20%)';
+        loadingImage.style.height = 'auto';
+        loadingImage.style.imageRendering = 'pixelated';
+        this.loadingOverlay.appendChild(loadingImage);
+        this.element.appendChild(this.loadingOverlay);
+    }
 
-        if (this.isImage) {
-            this.loadThumbnail(zip);
-        } else {
-            this.loadAnimation(zip);
+    hideLoadingOverlay() {
+        if (this.loadingOverlay) {
+            this.loadingOverlay.remove();
+            this.loadingOverlay = null;
         }
     }
 
@@ -261,12 +381,18 @@ class ClipnotePlayer {
         const cnsFile = await CNS.parse(buffer);
         // Show whichever frame the file itself designates as its thumbnail,
         // not always frame 0.
-        const frameCanvas = CNS.buildFrameCanvas(cnsFile, cnsFile.thumbnailFrame || 0);
+        const frameCanvas = CNS.buildFrameCanvas(cnsFile, cnsFile.thumbnailFrame || 0, this.palette);
         const img = document.createElement('img');
         img.src = frameCanvas.toDataURL('image/png');
         img.width = this.width;
         img.height = this.height;
+        img.style.width = '100%';
+        img.style.height = '100%';
+        img.style.objectFit = 'fill';
+        this.thumbnailImage = img;
         this.element.appendChild(img);
+        this.observeImageScale();
+        this.updateImageScale();
     }
 
     async loadAnimationCNS(buffer) {
@@ -291,7 +417,7 @@ class ClipnotePlayer {
 
         this.frames = [];
         for (let i = 0; i < cnsFile.frameCount; i++) {
-            this.frames.push(CNS.buildFrameCanvas(cnsFile, i));
+            this.frames.push(CNS.buildFrameCanvas(cnsFile, i, this.palette));
         }
 
         this.sound = this.loadSoundFromCNS(cnsFile);
@@ -310,6 +436,9 @@ class ClipnotePlayer {
                 this.thumbnailImage = null;
             }
         }
+        if (this.element.hasAttribute('autoplay')) {
+            this.togglePlay();
+        }
     }
 
     loadSoundFromCNS(cnsFile) {
@@ -319,23 +448,43 @@ class ClipnotePlayer {
         return new Audio(url);
     }
 
+    async setPalette(palette) {
+        this.palette = CNS.createPalette(palette, this.palette);
+        this.destroy();
+        this.element.replaceChildren();
+        this.ready = this.init();
+        return this.ready;
+    }
+
     async loadThumbnail(zip) {
+        const iniFile = zip.file('data.ini');
+        if (iniFile) {
+            this.clipMeta = this.parseIni(await iniFile.async('text'));
+        }
         const thumbBlob = await zip.file('thumb.png').async('blob');
         const thumbUrl = URL.createObjectURL(thumbBlob);
         const img = document.createElement('img');
         img.src = thumbUrl;
         img.width = this.width;
         img.height = this.height;
+        img.style.width = '100%';
+        img.style.height = '100%';
+        img.style.objectFit = 'fill';
+        this.thumbnailImage = img;
 
         this.element.appendChild(img);
+        this.observeImageScale();
+        this.updateImageScale();
     }
 
     async loadAnimation(zip) {
         const iniData = await zip.file('data.ini').async('text');
         const config = this.parseIni(iniData);
+        this.clipMeta = config;
         this.framerate = parseInt(config.data.framerate) || 12;
         this.loop = config.data.replay === '1';
         this.frameMax = parseInt(config.data.frame_max) || 0;
+        this.frameCount = this.frameMax + 1;
 
         this.frames = await this.loadFrames(zip, this.frameMax);
         this.sound = await this.loadSound(zip);
@@ -356,19 +505,7 @@ class ClipnotePlayer {
     }
 
     parseIni(data) {
-        const result = {};
-        let section = null;
-        data.split('\n').forEach(line => {
-            line = line.trim();
-            if (line.startsWith('[') && line.endsWith(']')) {
-                section = line.slice(1, -1).toLowerCase();
-                result[section] = {};
-            } else if (section && line.includes('=')) {
-                const [key, value] = line.split('=').map(s => s.trim());
-                result[section][key] = value.replace(/"/g, '');
-            }
-        });
-        return result;
+        return ClipnotePlayer.parseIni(data);
     }
 
     async loadFrames(zip, frameMax) {
@@ -474,10 +611,58 @@ class ClipnotePlayer {
         this.playerContainer = document.createElement('div');
         this.playerContainer.classList.add('clipnote-player-container');
         this.playerContainer.style.position = 'relative';
-        this.playerContainer.style.width = `${this.width}px`;
-        this.playerContainer.style.height = `${this.height}px`;
+        this.playerContainer.style.width = '100%';
+        this.playerContainer.style.aspectRatio = '4 / 3';
+        this.playerContainer.style.backgroundImage = 'url(img/bg.png)';
+        this.playerContainer.style.backgroundRepeat = 'repeat';
         this.playerContainer.style.overflow = `hidden`;
         this.element.appendChild(this.playerContainer);
+        this.updatePlayerScale = () => {
+            const widthScale = this.playerContainer.clientWidth / CNS.WIDTH;
+            const heightScale = this.playerContainer.clientHeight / CNS.HEIGHT;
+            const isIntegerScale = Math.abs(widthScale - Math.round(widthScale)) < 0.001 &&
+                Math.abs(heightScale - Math.round(heightScale)) < 0.001 &&
+                Math.abs(widthScale - heightScale) < 0.001;
+            const scale = widthScale;
+            this.playerContainer.style.setProperty('--player-scale', Math.max(scale, 0.1));
+            if (this.canvas) {
+                this.canvas.style.imageRendering = this.getImageRendering(isIntegerScale);
+            }
+            if (this.ctx) {
+                this.ctx.imageSmoothingEnabled = this.getImageRendering(isIntegerScale) !== 'pixelated';
+            }
+        };
+        this.resizeObserver = new ResizeObserver(this.updatePlayerScale);
+        this.resizeObserver.observe(this.playerContainer);
+        this.updatePlayerScale();
+        if (this.loadingOverlay) {
+            this.playerContainer.appendChild(this.loadingOverlay);
+        }
+    }
+
+    getImageRendering(isIntegerScale = false) {
+        if (this.scaling === 'integer' || this.scaling === 'pixelated') {
+            return 'pixelated';
+        }
+        if (this.scaling === 'smooth') {
+            return 'auto';
+        }
+        return isIntegerScale ? 'pixelated' : 'auto';
+    }
+
+    updateImageScale() {
+        if (!this.thumbnailImage) return;
+        const widthScale = this.element.clientWidth / CNS.WIDTH;
+        const heightScale = this.element.clientHeight / CNS.HEIGHT;
+        const isIntegerScale = Math.abs(widthScale - Math.round(widthScale)) < 0.001 &&
+            Math.abs(heightScale - Math.round(heightScale)) < 0.001 &&
+            Math.abs(widthScale - heightScale) < 0.001;
+        this.thumbnailImage.style.imageRendering = this.getImageRendering(isIntegerScale);
+    }
+
+    observeImageScale() {
+        this.imageResizeObserver = new ResizeObserver(() => this.updateImageScale());
+        this.imageResizeObserver.observe(this.element);
     }
 
   createCanvas() {
@@ -485,14 +670,19 @@ class ClipnotePlayer {
         if (!this.playerContainer) this.createPlayerContainer();
 
         this.canvas = document.createElement('canvas');
-        this.canvas.width = this.width;
-        this.canvas.height = this.height;
+        this.canvas.width = CNS.WIDTH;
+        this.canvas.height = CNS.HEIGHT;
+        this.canvas.style.width = '100%';
+        this.canvas.style.height = '100%';
+        this.canvas.style.objectFit = 'contain';
+        this.canvas.style.imageRendering = 'auto';
         this.canvas.style.display = 'block';
         this.canvas.style.position = 'absolute';
         this.canvas.style.left = '0';
         this.canvas.style.top = '0';
         this.canvas.style.zIndex = '1';
         this.ctx = this.canvas.getContext('2d');
+        this.ctx.imageSmoothingEnabled = true;
         this.playerContainer.appendChild(this.canvas);
         
         // Setup canvas interactions now that canvas exists
@@ -506,12 +696,17 @@ class ClipnotePlayer {
         this.controls.style.position = 'absolute';
         this.controls.style.left = '0';
         this.controls.style.bottom = '0';
+        this.controls.style.width = '100%';
+        this.controls.style.height = 'calc(30px * var(--player-scale))';
+        this.controls.style.gap = 'calc(8px * var(--player-scale))';
+        this.controls.style.gridTemplateColumns = 'calc(25px * var(--player-scale)) minmax(0, 1fr) calc(25px * var(--player-scale)) calc(65px * var(--player-scale))';
+        this.controls.style.alignItems = 'center';
         this.controls.style.zIndex = '3';
         this.controls.style.display = 'none';
         this.controls.style.backgroundImage = 'url(img/playerbottom2.png)';
+        this.controls.style.backgroundSize = 'auto 100%';
+        this.controls.style.backgroundRepeat = 'repeat-x';
         this.controls.style.imageRendering = 'pixelated';
-        this.controls.style.maxWidth = `${this.width}px`;
-        this.controls.style.maxHeight = '30px';
         
 
         // inner HTML for controls
@@ -531,16 +726,16 @@ class ClipnotePlayer {
         this.menuButton = document.createElement('button');
         this.menuButton.classList.add('clipnote-menu-button');
         this.menuButton.style.position = 'absolute';
-        this.menuButton.style.left = '6px';
-        this.menuButton.style.bottom = '6px';
+        this.menuButton.style.left = 'calc(6px * var(--player-scale))';
+        this.menuButton.style.bottom = 'calc(6px * var(--player-scale))';
         this.menuButton.style.zIndex = '4';
         this.menuButton.style.background = 'transparent';
         this.menuButton.style.border = 'none';
         this.menuButton.style.padding = '0';
         const btnImg = document.createElement('img');
         btnImg.src = this.menuImage;
-        btnImg.style.width = '28px';
-        btnImg.style.height = '28px';
+        btnImg.style.width = 'calc(28px * var(--player-scale))';
+        btnImg.style.height = 'calc(28px * var(--player-scale))';
         btnImg.style.imageRendering = 'pixelated';
         this.menuButton.appendChild(btnImg);
         this.playerContainer.appendChild(this.menuButton);
@@ -555,20 +750,31 @@ class ClipnotePlayer {
         [this.playPauseButton, this.volumebtn].forEach(btn => {
             btn.style.backgroundColor = 'transparent';
             btn.style.position = 'relative';
-            btn.style.top = '3px';
-            btn.style.left = '4px';
-            btn.style.maxWidth = '25px';
-            btn.style.maxHeight = '25px';
-            btn.style.minWidth = '25px';
-            btn.style.minHeight = '25px';
+            btn.style.top = '0';
+            btn.style.left = '0';
+            btn.style.width = 'calc(25px * var(--player-scale))';
+            btn.style.height = 'calc(25px * var(--player-scale))';
+            btn.style.flex = '0 0 calc(25px * var(--player-scale))';
+            btn.style.padding = '0';
+            btn.style.maxWidth = 'calc(25px * var(--player-scale))';
+            btn.style.maxHeight = 'calc(25px * var(--player-scale))';
+            btn.style.minWidth = 'calc(25px * var(--player-scale))';
+            btn.style.minHeight = 'calc(25px * var(--player-scale))';
             btn.style.imageRendering = 'pixelated';
             btn.style.border = 'none';
+            const image = btn.querySelector('img');
+            image.style.width = '100%';
+            image.style.height = '100%';
+            image.style.imageRendering = 'pixelated';
         });
 
         // timeline and volume styling
-        this.timeline.style.width = Math.max(100, this.width - 110) + 'px';
+        this.timeline.style.width = 'auto';
+        this.timeline.style.flex = '1 1 auto';
+        this.timeline.style.height = 'calc(16px * var(--player-scale))';
         this.timeline.style.position = 'relative';
-        this.volume.style.width = '65px';
+        this.volume.style.width = '90%';
+        this.volume.style.height = 'calc(16px * var(--player-scale))';
         this.volume.style.position = 'relative';
 
         // thumb CSS injection (only once)
@@ -576,11 +782,32 @@ class ClipnotePlayer {
             const style = document.createElement('style');
             style.id = 'clipnote-slider-styles';
             style.innerHTML = `
+                .clipnote-controls .play-pause,
+                .clipnote-controls .mute-unmute {
+                    box-sizing: border-box;
+                    width: calc(25px * var(--player-scale)) !important;
+                    height: calc(25px * var(--player-scale)) !important;
+                    min-width: calc(25px * var(--player-scale)) !important;
+                    min-height: calc(25px * var(--player-scale)) !important;
+                    max-width: calc(25px * var(--player-scale)) !important;
+                    max-height: calc(25px * var(--player-scale)) !important;
+                    flex: 0 0 calc(25px * var(--player-scale));
+                    padding: 0 !important;
+                }
+                .clipnote-controls .play-pause img,
+                .clipnote-controls .mute-unmute img {
+                    display: block;
+                    width: 100% !important;
+                    height: 100% !important;
+                    max-width: none !important;
+                    max-height: none !important;
+                    image-rendering: pixelated;
+                }
                 .timeline::-webkit-slider-thumb, .volume::-webkit-slider-thumb {
                     background: url('img/playerthingy.png') no-repeat center;
                     background-size: contain;
-                    width: 16px;
-                    height: 16px;
+                    width: calc(16px * var(--player-scale));
+                    height: calc(16px * var(--player-scale));
                     border: none;
                     cursor: pointer;
                     appearance: none;
@@ -588,8 +815,8 @@ class ClipnotePlayer {
                 .timeline::-moz-range-thumb, .volume::-moz-range-thumb {
                     background: url('img/playerthingy.png') no-repeat center;
                     background-size: contain;
-                    width: 18px;
-                    height: 18px;
+                    width: calc(18px * var(--player-scale));
+                    height: calc(18px * var(--player-scale));
                     border: none;
                     cursor: pointer;
                 }
@@ -601,7 +828,9 @@ class ClipnotePlayer {
         this.updateSliderBackground = (slider) => {
             const percentage = (slider.value - slider.min) / (slider.max - slider.min) * 100;
             // Adjust for circular thumb visual center - thumb is 16px wide, so we need to account for the visual offset
-            const thumbWidth = 16;
+            const thumbWidth = 16 * parseFloat(
+                getComputedStyle(this.playerContainer).getPropertyValue('--player-scale')
+            );
             const sliderWidth = slider.offsetWidth;
             const thumbOffset = thumbWidth / 2;
             const adjustedPercentage = percentage * (sliderWidth - thumbWidth) / sliderWidth + (thumbOffset / sliderWidth * 100);
@@ -655,6 +884,14 @@ class ClipnotePlayer {
         this.controls.addEventListener('input', resetHideTimer);
         this.playerContainer.addEventListener('pointermove', resetHideTimer);
 
+        this.outsideClickHandler = (event) => {
+            if (this.controls.style.display !== 'none' &&
+                !this.playerContainer.contains(event.target)) {
+                this.hideControlsWithSpring();
+            }
+        };
+        document.addEventListener('pointerdown', this.outsideClickHandler);
+
         // Event Listeners for media controls
         this.playPauseButton.addEventListener('click', () => this.togglePlay());
         this.timeline.addEventListener('input', () => this.updateFrame());
@@ -673,9 +910,9 @@ class ClipnotePlayer {
     }
     
     showControls() {
-        this.controls.style.display = 'flex';
+        this.controls.style.display = 'grid';
         this.controls.style.alignItems = 'center';
-        this.controls.style.gap = '8px';
+        this.controls.style.gap = 'calc(8px * var(--player-scale))';
         // start auto-hide timer
         if (this.hideUiTimer) clearTimeout(this.hideUiTimer);
         this.hideUiTimer = setTimeout(() => this.hideControlsWithSpring(), 200);
@@ -686,11 +923,11 @@ class ClipnotePlayer {
         this.controls.style.transition = 'transform 0.4s cubic-bezier(0.175, 0.885, 0.32, 1), opacity 0.3s ease-out';
         
         // Start from below and invisible
-        this.controls.style.transform = 'translateY(15px)';
+        this.controls.style.transform = 'translateY(calc(15px * var(--player-scale)))';
         this.controls.style.opacity = '0';
-        this.controls.style.display = 'flex';
+        this.controls.style.display = 'grid';
         this.controls.style.alignItems = 'center';
-        this.controls.style.gap = '8px';
+        this.controls.style.gap = 'calc(8px * var(--player-scale))';
         
         // Animate to final position with spring effect
         setTimeout(() => {
@@ -752,7 +989,8 @@ class ClipnotePlayer {
 
    togglePlay() {
         // If clip finished and not looping, restart from beginning
-        if (!this.loop && this.frames && this.currentFrame >= this.frames.length) {
+        if (!this.loop && this.frames && !this.isPlaying &&
+            this.currentFrame === this.frames.length - 1) {
             this.currentFrame = 0;
             if (this.sound) this.sound.currentTime = 0;
         }
@@ -763,11 +1001,6 @@ class ClipnotePlayer {
             : '<img src="img/playericon1.png" alt="Play" />';
 
         if (this.isPlaying) {
-            // If starting playback when at or beyond last frame, reset
-            if (this.frames && this.currentFrame >= this.frames.length) {
-                this.currentFrame = 0;
-            }
-
             // Set proper start time for timing calculations
             this.startTime = performance.now() - (this.currentFrame * this.frameInterval);
             
@@ -854,6 +1087,10 @@ class ClipnotePlayer {
                 if (this.loop) {
                     this.startTime = timestamp; // Reset timing for loop
                     this.currentFrame = 0;
+                    this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+                    this.ctx.drawImage(this.frames[0], 0, 0);
+                    this.timeline.value = 0;
+                    this.updateSliderBackground(this.timeline);
                     if (this.sound) {
                         // Always reset audio for loop, regardless of current state
                         this.sound.currentTime = 0;
@@ -865,7 +1102,11 @@ class ClipnotePlayer {
                     this.isPlaying = false;
                     this.animationId = null;
                     this.playPauseButton.innerHTML = '<img src="img/playericon1.png" alt="Play" />';
-                    this.currentFrame = 0; // Reset to beginning for non-looped animations
+                    this.currentFrame = this.frames.length - 1;
+                    this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+                    this.ctx.drawImage(this.frames[this.currentFrame], 0, 0);
+                    this.timeline.value = this.currentFrame;
+                    this.updateSliderBackground(this.timeline);
                     
                     if (this.sound) {
                         this.sound.pause();
@@ -956,6 +1197,15 @@ class ClipnotePlayer {
     
     // Cleanup method to free resources
     destroy() {
+        this.hideLoadingOverlay();
+        if (this.resizeObserver) {
+            this.resizeObserver.disconnect();
+            this.resizeObserver = null;
+        }
+        if (this.imageResizeObserver) {
+            this.imageResizeObserver.disconnect();
+            this.imageResizeObserver = null;
+        }
         if (this.animationId) {
             cancelAnimationFrame(this.animationId);
             this.animationId = null;
@@ -1063,14 +1313,14 @@ class ClipnotePlayer {
         this.controls.style.transition = 'transform 0.4s cubic-bezier(0.25, 0.46, 0.45, 0.94), opacity 0.2s ease-in';
         
         // Animate further down (out of view) and invisible
-        this.controls.style.transform = 'translateY(70px)';
+        this.controls.style.transform = 'translateY(calc(70px * var(--player-scale)))';
         this.controls.style.opacity = '0';
         
         // Hide display after animation
         setTimeout(() => {
             this.controls.style.display = 'none';
             // Reset transform for next show (back to starting position)
-            this.controls.style.transform = 'translateY(15px)';
+            this.controls.style.transform = 'translateY(calc(15px * var(--player-scale)))';
         }, 100);
         
         if (this.hideUiTimer) {
@@ -1101,6 +1351,9 @@ class ClipnotePlayer {
         if (this.mouseProximityHandler) {
             document.removeEventListener('mousemove', this.mouseProximityHandler);
         }
+        if (this.outsideClickHandler) {
+            document.removeEventListener('pointerdown', this.outsideClickHandler);
+        }
         
         // Remove keyboard listener
         if (this.keyboardHandler) {
@@ -1120,6 +1373,8 @@ class ClipnotePlayer {
         this.isPlaying = false;
     }
 }
+
+window.ClipnotePlayer = ClipnotePlayer;
 
 document.addEventListener('DOMContentLoaded', () => {
     document.querySelectorAll('clipnote-image, clipnote-player').forEach(el => new ClipnotePlayer(el));
