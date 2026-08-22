@@ -1,6 +1,7 @@
 
 const CNS = (() => {
     const MAGIC = [0x43, 0x4E, 0x53]; // "CNS"
+    const VERSION = 2; // v2 adds thumbnail_frame to HDR1
     const WIDTH = 320, HEIGHT = 240;
     const TILE = 8;
     const TILES_X = WIDTH / TILE;    // 40
@@ -78,6 +79,7 @@ const CNS = (() => {
         if (bytes[0] !== MAGIC[0] || bytes[1] !== MAGIC[1] || bytes[2] !== MAGIC[2]) {
             throw new Error('CNS: not a CNS file (bad magic)');
         }
+        const version = readUint16LE(bytes, 3);
 
         const chunks = readChunks(bytes);
         const hdr = chunks['HDR1'];
@@ -85,6 +87,7 @@ const CNS = (() => {
         let o = 0;
         const framerate = hdr[o]; o += 1;
         const frameMax = readUint32LE(hdr, o); o += 4;
+        const thumbnailFrame = readUint32LE(hdr, o); o += 4;
         const replay = hdr[o]; o += 1;
         const locked = hdr[o]; o += 1;
         let fileId; [fileId, o] = readString(hdr, o);
@@ -142,7 +145,7 @@ const CNS = (() => {
         const audioBytes = hasAudio && chunks['AUD1'] ? chunks['AUD1'] : null;
 
         return {
-            framerate, frameMax, frameCount, replay, locked,
+            framerate, frameMax, frameCount, thumbnailFrame, replay, locked,
             fileId, spinoff, spinoffSourceFileId,
             originalUserName, originalUserId,
             userName, userId,
@@ -254,7 +257,9 @@ class ClipnotePlayer {
 
     async loadThumbnailCNS(buffer) {
         const cnsFile = await CNS.parse(buffer);
-        const frameCanvas = CNS.buildFrameCanvas(cnsFile, 0);
+        // Show whichever frame the file itself designates as its thumbnail,
+        // not always frame 0.
+        const frameCanvas = CNS.buildFrameCanvas(cnsFile, cnsFile.thumbnailFrame || 0);
         const img = document.createElement('img');
         img.src = frameCanvas.toDataURL('image/png');
         img.width = this.width;
@@ -268,6 +273,7 @@ class ClipnotePlayer {
         this.framerate = cnsFile.framerate || 12;
         this.loop = cnsFile.replay === 1;
         this.frameMax = cnsFile.frameMax || 0;
+        this.thumbnailFrame = cnsFile.thumbnailFrame || 0;
 
         this.cnsMeta = {
             fileId: cnsFile.fileId,
@@ -278,6 +284,7 @@ class ClipnotePlayer {
             originalUserId: cnsFile.originalUserId,
             userName: cnsFile.userName,
             userId: cnsFile.userId,
+            thumbnailFrame: cnsFile.thumbnailFrame,
         };
 
         this.frames = [];
